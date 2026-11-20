@@ -331,8 +331,18 @@ if let i = CommandLine.arguments.firstIndex(of: "--benchmark"), i + 1 < CommandL
     for _ in 0..<3 { for p in points { kinds[engine.debugTargetKind(at: p), default: 0] += 1 } }
     let ms = Double(DispatchTime.now().uptimeNanoseconds - start) / 1e6
     let n = Double(points.count * 3)
-    let report = String(format: "trusted=%@ samples=%d avg_ms=%.3f avg_ax_calls=%.2f targets=%@\n",
-                        AXIsProcessTrusted() ? "yes" : "no", Int(n), ms / n, Double(AXStats.calls) / n, kinds.description)
+    let scrollCalls = Double(AXStats.calls)
+    // Mouse-down cost for drag to unsnap (runs on every click).
+    let wmClick = WindowManager()
+    AXStats.calls = 0
+    var hits = 0
+    let clickStart = DispatchTime.now().uptimeNanoseconds
+    for _ in 0..<3 { for p in points where wmClick.dragUnsnapCandidate(at: p) != nil { hits += 1 } }
+    let clickMs = Double(DispatchTime.now().uptimeNanoseconds - clickStart) / 1e6
+    let clickCalls = Double(AXStats.calls) / n
+    let report = String(format: "trusted=%@ samples=%d scroll_avg_ms=%.3f scroll_ax_calls=%.2f targets=%@ click_avg_ms=%.3f click_ax_calls=%.2f click_hits=%d\n",
+                        AXIsProcessTrusted() ? "yes" : "no", Int(n), ms / n, Double(AXStats.calls == 0 ? 0 : 0) + scrollCalls / n,
+                        kinds.description, clickMs / n, clickCalls, hits)
     try? report.write(toFile: CommandLine.arguments[i + 1], atomically: true, encoding: .utf8)
     print(report, terminator: "")
     exit(0)

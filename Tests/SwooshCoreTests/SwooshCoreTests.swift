@@ -366,6 +366,28 @@ struct GeometryTests {
         #expect(huge.width == area.width && huge.height == area.height)
     }
 
+    @Test("Click pre-filter: only snapped title-bar rows pass")
+    func snappedTitleBarFilter() {
+        let zone: CGFloat = 100
+        // Top of the work area (maximized / halves / quarters / thirds).
+        #expect(Geometry.couldBeSnappedTitleBar(CGPoint(x: 700, y: area.minY + 10), area: area, gap: 0, zone: zone))
+        // Halfway down (bottom quarters).
+        #expect(Geometry.couldBeSnappedTitleBar(CGPoint(x: 700, y: area.minY + area.height / 2 + 10), area: area, gap: 0, zone: zone))
+        // A third of the way down (middle-row ninths).
+        #expect(Geometry.couldBeSnappedTitleBar(CGPoint(x: 700, y: area.minY + area.height / 3 + 10), area: area, gap: 0, zone: zone))
+        // In the middle of content, between rows.
+        #expect(!Geometry.couldBeSnappedTitleBar(CGPoint(x: 700, y: area.minY + area.height * 0.84), area: area, gap: 0, zone: zone))
+        // Off this area horizontally.
+        #expect(!Geometry.couldBeSnappedTitleBar(CGPoint(x: area.maxX + 50, y: area.minY + 10), area: area, gap: 0, zone: zone))
+        // Every layout's own title bar passes, with and without a gap.
+        for gap in [CGFloat(0), 10] {
+            for l in Layout.allCases {
+                let r = l.rect(in: area, gap: gap)
+                #expect(Geometry.couldBeSnappedTitleBar(CGPoint(x: r.midX, y: r.minY + 12), area: area, gap: gap, zone: zone), "\(l)")
+            }
+        }
+    }
+
     @Test func stageManagerInset() {
         let w = Geometry.workArea(visible: area, stageManagerInset: 120)
         #expect(w.minX == 120 && w.maxX == area.maxX)

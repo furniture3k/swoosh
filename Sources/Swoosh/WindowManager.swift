@@ -274,6 +274,11 @@ final class WindowManager {
     /// A snapped window grabbed by its title bar at `point`: returns it with the
     /// frame to restore (its pre-snap frame, or a default size).
     func dragUnsnapCandidate(at point: CGPoint) -> (window: AXUIElement, frame: CGRect, saved: CGRect, onControl: Bool)? {
+        // Arithmetic first: is this click even on a row where a snapped
+        // window's title bar can be? Rules out most clicks with no IPC.
+        guard let screen = Screens.screen(containing: point),
+              Geometry.couldBeSnappedTitleBar(point, area: Screens.workArea(screen), gap: Prefs.gap,
+                                              zone: Prefs.titlebarHeight + 60) else { return nil }
         guard let hit = dragWindow(at: point), let frame = hit.window.frame, state(of: hit.window) != nil else { return nil }
         let area = workArea(for: frame)
         var saved = savedFrame(for: hit.window) ?? Geometry.restoreFrame(saved: nil, area: area)

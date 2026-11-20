@@ -112,6 +112,19 @@ public enum Geometry {
         return CGRect(x: x.rounded(), y: current.minY.rounded(), width: w.rounded(), height: h.rounded())
     }
 
+    /// Whether `point` could be on the title bar of a window snapped inside
+    /// `area`. Snapped windows' top edges only sit on a few rows (top, a third,
+    /// half, two thirds, the almost-maximize inset), so most clicks can be
+    /// ruled out with arithmetic alone, before any Accessibility request.
+    public static func couldBeSnappedTitleBar(_ point: CGPoint, area: CGRect, gap: CGFloat, zone: CGFloat) -> Bool {
+        guard point.x >= area.minX, point.x <= area.maxX else { return false }
+        return snappedRowTops(area: area, gap: gap).contains { top in point.y >= top - 2 && point.y <= top + zone }
+    }
+
+    static func snappedRowTops(area: CGRect, gap: CGFloat) -> Set<CGFloat> {
+        Set(Layout.allCases.map { $0.rect(in: area, gap: gap).minY })
+    }
+
     /// Shrunken preview used for "Minimize": a small card near the bottom centre.
     public static func minimizePreview(for frame: CGRect, in area: CGRect) -> CGRect {
         let w = min(frame.width, area.width) * 0.25, h = min(frame.height, area.height) * 0.25

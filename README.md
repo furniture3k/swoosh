@@ -130,8 +130,12 @@ How it stays light:
   - scrolls in window content are rejected after about 3 Accessibility calls
   - the interface tree is only walked as deep as needed
 
-  Measured with `--benchmark`: 0.37 ms and 3.4 Accessibility calls per scroll
-  start, down from 2.15 ms and 50.
+  Measured with `--benchmark`: about 0.3 ms and 3.4 Accessibility calls per
+  scroll start, down from 2.15 ms and 50.
+- **Cheap clicks.** Drag to unsnap watches clicks through a listen-only tap,
+  which never holds or delays them. A click is first checked by arithmetic: a
+  snapped window's title bar can only be at a few heights (top, a third, half,
+  two thirds). Clicks anywhere else cost no Accessibility calls at all.
 - **Settings in a separate process.** Settings runs as its own short-lived
   process that exits when you close the window. The always-running agent never
   loads SwiftUI views, so it stays around 11 MB no matter how often you open
