@@ -7,6 +7,39 @@ Swipe, pinch or double tap on a window's title bar to snap, maximize, minimize,
 close or move it. Written from scratch based on how Swish works (see
 [docs/REVERSE_ENGINEERING.md](docs/REVERSE_ENGINEERING.md)).
 
+## Install
+
+1. Download the latest `Swoosh-x.y.z.dmg` from the
+   [Releases](../../releases/latest) page.
+2. Open it and drag **Swoosh** onto **Applications**.
+3. Open Swoosh from Applications. Its icon appears in the menu bar, and the
+   Setup tab walks you through allowing Accessibility access.
+
+Swoosh isn't notarized by Apple, so the first time you open it macOS says it
+can't verify the developer. Click **Done**, then go to System Settings ›
+Privacy & Security, scroll down and click **Open Anyway** next to the Swoosh
+message. You only need to do this once.
+
+Requires macOS 13 or later.
+
+## Releasing
+
+```sh
+Scripts/make-dmg.sh       # test, build and package dist/Swoosh-<version>.dmg
+```
+
+To publish a release on GitHub, bump `CFBundleShortVersionString` in
+`Resources/Info.plist`, commit, then push a tag:
+
+```sh
+git tag v1.0.0 && git push origin v1.0.0
+```
+
+The Release workflow builds the DMG and attaches it to a GitHub release. With a
+paid Apple Developer account you can sign with a "Developer ID Application"
+certificate and run `NOTARY_PROFILE=<profile> Scripts/make-dmg.sh` to notarize
+it, which removes the "can't verify the developer" warning.
+
 ## Build, test and run
 
 ```sh

@@ -27,8 +27,15 @@ cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 # Sign with a stable identity when one exists, so macOS keeps the Accessibility
 # permission across rebuilds. Falls back to ad-hoc signing (re-grant each build).
-IDENTITY="${SWOOSH_SIGN_IDENTITY:-$(security find-identity -v -p codesigning 2>/dev/null | awk -F'"' '/Apple Development|Developer ID Application/ {print $2; exit}')}"
-codesign --force --deep --timestamp=none --sign "${IDENTITY:--}" "$APP"
+IDS=$(security find-identity -v -p codesigning 2>/dev/null || true)
+IDENTITY="${SWOOSH_SIGN_IDENTITY:-$(print -r -- "$IDS" | awk -F'"' '/Developer ID Application/ {print $2; exit}')}"
+[[ -n "$IDENTITY" ]] || IDENTITY=$(print -r -- "$IDS" | awk -F'"' '/Apple Development/ {print $2; exit}')
+if [[ "$IDENTITY" == Developer\ ID* ]]; then
+  # Hardened runtime + secure timestamp are required for notarization.
+  codesign --force --deep --options runtime --timestamp --sign "$IDENTITY" "$APP"
+else
+  codesign --force --deep --timestamp=none --sign "${IDENTITY:--}" "$APP"
+fi
 echo "Signed with: ${IDENTITY:-ad-hoc}"
 echo "Built $APP"
 if [[ " $* " == *" --install "* ]]; then
