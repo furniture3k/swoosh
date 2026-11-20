@@ -108,6 +108,40 @@ pointer to snap it, for example swipe ↑ then ← for the left half.
 
 Swipe ↓ to minimize every window on that screen, and ↑ to restore them.
 
+## Performance
+
+Swoosh is built to be invisible when idle. Measured on Apple silicon, at idle:
+
+| | Swoosh 1.2 | Swish 1.11 |
+|---|---|---|
+| Memory (phys_footprint) | **11 MB** | 15 MB |
+| Threads | **3** | 5 |
+| Idle CPU / wake-ups | 0 % / 0 | ~0 % |
+
+How it stays light:
+
+- **Fast scroll filtering.** Every two-finger scroll passes through the event
+  tap, so the check "is this a title bar, Dock icon or the menu bar?" is kept
+  cheap:
+  - the menu bar is detected by geometry alone, with no Accessibility calls
+  - one hit test is made, and the Dock is recognised by its process ID
+  - window attributes are fetched in one batched request
+  - scrolls in window content are rejected after about 3 Accessibility calls
+  - the interface tree is only walked as deep as needed
+
+  Measured with `--benchmark`: 0.37 ms and 3.4 Accessibility calls per scroll
+  start, down from 2.15 ms and 50.
+- **Settings in a separate process.** Settings runs as its own short-lived
+  process that exits when you close the window. The always-running agent never
+  loads SwiftUI views, so it stays around 11 MB no matter how often you open
+  Settings. Run `--memory-test <file>` to check.
+- **Event-driven, not polling.** Permission changes arrive via the system's
+  Accessibility notification. The only timer is a 30-second, coalesced
+  fallback.
+- **Lazy, cached and stripped.** The preview and tooltip windows are created
+  on first use. Excluded apps, the Dock's process ID and the Stage Manager
+  state are cached. The binary is stripped (about 0.5 MB).
+
 ## Keyboard shortcuts
 
 Set the keys under Settings › Keyboard: Arrow keys (the default), WASD, IJKL or Off.

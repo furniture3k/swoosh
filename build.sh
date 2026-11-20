@@ -23,6 +23,7 @@ APP=build/Swoosh.app
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/Swoosh "$APP/Contents/MacOS/Swoosh"
+strip -x "$APP/Contents/MacOS/Swoosh"   # drop local symbols: smaller binary to map
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 # Sign with a stable identity when one exists, so macOS keeps the Accessibility

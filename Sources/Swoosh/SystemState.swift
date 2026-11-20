@@ -13,11 +13,18 @@ enum SystemState {
         return (v as? NSNumber)?.boolValue ?? def
     }
 
-    /// Stage Manager is on and its recent-apps strip is shown.
+    private static var stageCache: (value: Bool, at: TimeInterval) = (false, -.infinity)
+
+    /// Stage Manager is on and its recent-apps strip is shown. Re-read from
+    /// disk at most every few seconds; it is consulted on every gesture.
     static var stageManagerStripVisible: Bool {
-        CFPreferencesAppSynchronize("com.apple.WindowManager" as CFString)
-        return bool("GloballyEnabled", "com.apple.WindowManager", default: false)
-            && !bool("AutoHide", "com.apple.WindowManager", default: false)
+        let now = ProcessInfo.processInfo.systemUptime
+        if now - stageCache.at > 5 {
+            CFPreferencesAppSynchronize("com.apple.WindowManager" as CFString)
+            stageCache = (bool("GloballyEnabled", "com.apple.WindowManager", default: false)
+                && !bool("AutoHide", "com.apple.WindowManager", default: false), now)
+        }
+        return stageCache.value
     }
 
     /// macOS 15+ "Tiled windows have margins" setting.

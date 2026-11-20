@@ -7,8 +7,9 @@ import SwooshCore
 /// are swallowed (the app underneath never sees them) and turned into actions.
 final class GestureEngine {
     private let wm: WindowManager
-    let overlay = Overlay()
-    let hud = GestureHUD()
+    /// Created on first use, so an idle Swoosh owns no extra windows.
+    lazy var overlay = Overlay()
+    lazy var hud = GestureHUD()
     private var tap: CFMachPort?
     private var source: CFRunLoopSource?
 
@@ -140,10 +141,25 @@ final class GestureEngine {
             return .window(c.window)
         }
         chained = nil
-        if let w = wm.titlebarWindow(at: point, allowFullScreen: hold) { return .window(w) }
-        if Prefs.dockGestures, let app = wm.dockApp(at: point) { return .dock(app) }
-        if Prefs.menubarGestures, let screen = Screens.menuBarScreen(at: point) { return .menubar(screen) }
-        return nil
+        // The menu bar strip is pure geometry: no Accessibility requests needed.
+        if let screen = Screens.menuBarScreen(at: point) {
+            return Prefs.menubarGestures ? .menubar(screen) : nil
+        }
+        switch wm.hit(at: point, allowFullScreen: hold, dock: Prefs.dockGestures) {
+        case .window(let w)?: return .window(w)
+        case .dock(let app)?: return .dock(app)
+        case nil: return nil
+        }
+    }
+
+    /// Benchmark hook: what a gesture starting at `point` would target.
+    func debugTargetKind(at point: CGPoint) -> String {
+        switch target(at: point, hold: false) {
+        case .window?: return "window"
+        case .dock?: return "dock"
+        case .menubar?: return "menubar"
+        case nil: return "none"
+        }
     }
 
     private func chain(_ win: AXUIElement, at point: CGPoint) {

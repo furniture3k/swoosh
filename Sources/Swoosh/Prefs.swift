@@ -3,6 +3,11 @@ import SwooshCore
 
 /// UserDefaults-backed settings. Keys are shared with the SwiftUI settings view.
 enum Prefs {
+    /// Posted by the Settings process after it changes a value.
+    static let changedNotification = Notification.Name("com.joshuatrow.swoosh.prefsChanged")
+    /// Posted by the agent to switch the open Settings window to a tab.
+    static let showTabNotification = Notification.Name("com.joshuatrow.swoosh.showTab")
+
     enum Key {
         static let enabled = "enabled"
         static let sensitivity = "swipeThreshold"
@@ -96,11 +101,18 @@ enum Prefs {
         return CGFloat(d.double(forKey: Key.gap))
     }
 
+    private static var excludedCache: (raw: String, set: Set<String>) = ("\u{0}", [])
+
+    /// Parsed once per change of the underlying setting (checked on every gesture).
     static var excludedApps: Set<String> {
-        Set((d.string(forKey: Key.excludedApps) ?? "")
-            .split(whereSeparator: { $0 == "," || $0.isNewline })
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty })
+        let raw = d.string(forKey: Key.excludedApps) ?? ""
+        if raw != excludedCache.raw {
+            excludedCache = (raw, Set(raw
+                .split(whereSeparator: { $0 == "," || $0.isNewline })
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }))
+        }
+        return excludedCache.set
     }
 
     static func countSwoosh() { d.set(d.integer(forKey: Key.swooshCount) + 1, forKey: Key.swooshCount) }

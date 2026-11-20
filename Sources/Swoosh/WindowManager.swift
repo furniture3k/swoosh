@@ -15,36 +15,87 @@ final class WindowManager {
 
     // MARK: Hit testing
 
+    enum Hit {
+        case window(AXUIElement)
+        case dock(NSRunningApplication)
+    }
+
+    /// What a gesture at `point` would act on: one hit test, then the cheapest
+    /// checks first. A scroll in a window's content (the common case) is
+    /// rejected after about three Accessibility requests.
+    func hit(at point: CGPoint, allowFullScreen: Bool, dock: Bool) -> Hit? {
+        guard let el = AXUIElement.element(at: point), let pid = el.pid, pid != ownPID else { return nil }
+        if pid == dockPID {
+            guard dock, let app = dockApp(element: el) else { return nil }
+            return .dock(app)
+        }
+        if isExcluded(pid: pid) { return nil }
+        return titlebarWindow(element: el, at: point, allowFullScreen: allowFullScreen).map { .window($0) }
+    }
+
     /// The window whose title bar / toolbar region is under `point`.
     func titlebarWindow(at point: CGPoint, allowFullScreen: Bool = false) -> AXUIElement? {
-        guard let el = AXUIElement.element(at: point),
-              let win = el.windowAncestor(),
-              let frame = win.frame,
-              isEligible(win, allowFullScreen: allowFullScreen) else { return nil }
-        let accepted = TitlebarPolicy.accepts(
-            offsetY: point.y - frame.minY,
-            windowHeight: frame.height,
-            baseHeight: Prefs.titlebarHeight,
-            ancestorRoles: el.roles(upTo: win),
-            hitIsWindow: CFEqual(el, win))
-        return accepted && frame.contains(point) ? win : nil
+        guard let el = AXUIElement.element(at: point), let pid = el.pid, pid != ownPID, !isExcluded(pid: pid) else { return nil }
+        return titlebarWindow(element: el, at: point, allowFullScreen: allowFullScreen)
+    }
+
+    private func titlebarWindow(element el: AXUIElement, at point: CGPoint, allowFullScreen: Bool) -> AXUIElement? {
+        let own = el.attributes(["AXRole", "AXWindow"])
+        let hitIsWindow = (own[0] as? String) == "AXWindow"
+        guard let win = hitIsWindow ? el : (AXUIElement.asElement(own[1]) ?? el.windowAncestor()) else { return nil }
+
+        let w = win.attributes(["AXPosition", "AXSize", "AXSubrole", "AXFullScreen"])
+        guard let origin = AXUIElement.asPoint(w[0]), let size = AXUIElement.asSize(w[1]) else { return nil }
+        let frame = CGRect(origin: origin, size: size)
+        let base = Prefs.titlebarHeight
+        let offsetY = point.y - frame.minY
+        // Fast reject: nowhere near the top of the window.
+        guard frame.contains(point), offsetY >= 0, offsetY <= base + 60 else { return nil }
+
+        if !allowFullScreen, (w[3] as? NSNumber)?.boolValue == true { return nil }
+        let sub = w[2] as? String
+        guard sub == nil || sub == "AXStandardWindow" || sub == "AXDialog" else { return nil }
+
+        // Only walk as far up the tree as the policy needs.
+        let depth = offsetY <= base ? TitlebarPolicy.blockingDepth : 10
+        let roles = hitIsWindow ? [] : el.roles(upTo: win, limit: depth)
+        let accepted = TitlebarPolicy.accepts(offsetY: offsetY, windowHeight: frame.height, baseHeight: base,
+                                              ancestorRoles: roles, hitIsWindow: hitIsWindow)
+        return accepted ? win : nil
     }
 
     func isEligible(_ win: AXUIElement, allowFullScreen: Bool = false) -> Bool {
         guard let pid = win.pid, pid != ownPID else { return false }
-        if !allowFullScreen, isFullScreen(win) { return false }
-        let sub = win.subrole
+        let v = win.attributes(["AXSubrole", "AXFullScreen"])
+        if !allowFullScreen, (v[1] as? NSNumber)?.boolValue == true { return false }
+        let sub = v[0] as? String
         guard sub == nil || sub == "AXStandardWindow" || sub == "AXDialog" else { return false }
         return !isExcluded(pid: pid)
     }
 
+    private var bundleIDs: [pid_t: String] = [:]
+
     private func isExcluded(pid: pid_t) -> Bool {
-        guard let bundle = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier else { return false }
-        return Prefs.excludedApps.contains(bundle)
+        let excluded = Prefs.excludedApps
+        guard !excluded.isEmpty else { return false }
+        if bundleIDs[pid] == nil {
+            if bundleIDs.count > 200 { bundleIDs.removeAll() }
+            bundleIDs[pid] = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier ?? ""
+        }
+        return excluded.contains(bundleIDs[pid]!)
+    }
+
+    private var cachedDockPID: pid_t?
+
+    /// The Dock's process, looked up once and refreshed if the Dock restarts.
+    private var dockPID: pid_t? {
+        if let pid = cachedDockPID, kill(pid, 0) == 0 { return pid }
+        cachedDockPID = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first?.processIdentifier
+        return cachedDockPID
     }
 
     func isFullScreen(_ win: AXUIElement) -> Bool { win.bool("AXFullScreen") ?? false }
-    func isAlive(_ win: AXUIElement) -> Bool { win.frame != nil }
+    func isAlive(_ win: AXUIElement) -> Bool { win.role != nil }
 
     /// Focused window of the frontmost app (keyboard shortcuts act on it).
     func frontmostWindow() -> AXUIElement? {
@@ -100,18 +151,21 @@ final class WindowManager {
 
     /// The running app whose Dock icon is under `point`.
     func dockApp(at point: CGPoint) -> NSRunningApplication? {
-        guard let el = AXUIElement.element(at: point),
-              let pid = el.pid,
-              NSRunningApplication(processIdentifier: pid)?.bundleIdentifier == "com.apple.dock",
-              el.role == "AXDockItem", el.subrole == "AXApplicationDockItem" else { return nil }
+        guard let el = AXUIElement.element(at: point), el.pid == dockPID else { return nil }
+        return dockApp(element: el)
+    }
+
+    private func dockApp(element el: AXUIElement) -> NSRunningApplication? {
+        let v = el.attributes(["AXRole", "AXSubrole", "AXURL", "AXTitle"])
+        guard (v[0] as? String) == "AXDockItem", (v[1] as? String) == "AXApplicationDockItem" else { return nil }
         let running = NSWorkspace.shared.runningApplications
-        if let url = el.raw("AXURL") as? URL {
+        if let url = v[2] as? URL {
             let path = url.standardizedFileURL.resolvingSymlinksInPath().path
             if let app = running.first(where: { $0.bundleURL?.standardizedFileURL.resolvingSymlinksInPath().path == path }) {
                 return app
             }
         }
-        let title = el.string("AXTitle")
+        let title = v[3] as? String
         return running.first { $0.activationPolicy == .regular && $0.localizedName == title }
     }
 

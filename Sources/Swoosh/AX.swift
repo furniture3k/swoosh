@@ -2,6 +2,9 @@ import AppKit
 import ApplicationServices
 
 /// Thin helpers over the Accessibility C API.
+/// Counts cross-process Accessibility requests (for `--benchmark`).
+enum AXStats { static var calls = 0 }
+
 extension AXUIElement {
     static let systemWide: AXUIElement = {
         let el = AXUIElementCreateSystemWide()
@@ -12,6 +15,7 @@ extension AXUIElement {
     /// Element under a point in global (top-left origin) coordinates.
     static func element(at point: CGPoint) -> AXUIElement? {
         var el: AXUIElement?
+        AXStats.calls += 1
         guard AXUIElementCopyElementAtPosition(systemWide, Float(point.x), Float(point.y), &el) == .success else {
             return nil
         }
@@ -20,8 +24,40 @@ extension AXUIElement {
 
     func raw(_ name: String) -> CFTypeRef? {
         var value: CFTypeRef?
+        AXStats.calls += 1
         guard AXUIElementCopyAttributeValue(self, name as CFString, &value) == .success else { return nil }
         return value
+    }
+
+    /// Several attributes in one cross-process request. Missing ones are nil.
+    func attributes(_ names: [String]) -> [CFTypeRef?] {
+        var values: CFArray?
+        AXStats.calls += 1
+        guard AXUIElementCopyMultipleAttributeValues(self, names as CFArray, AXCopyMultipleAttributeOptions(rawValue: 0), &values) == .success,
+              let array = values as [AnyObject]?, array.count == names.count else {
+            return Array(repeating: nil, count: names.count)
+        }
+        return array.map { v in
+            if CFGetTypeID(v) == AXValueGetTypeID(), AXValueGetType(v as! AXValue) == .axError { return nil }
+            return v
+        }
+    }
+
+    static func asElement(_ v: CFTypeRef?) -> AXUIElement? {
+        guard let v, CFGetTypeID(v) == AXUIElementGetTypeID() else { return nil }
+        return (v as! AXUIElement)
+    }
+
+    static func asPoint(_ v: CFTypeRef?) -> CGPoint? {
+        guard let v, CFGetTypeID(v) == AXValueGetTypeID() else { return nil }
+        var p = CGPoint.zero
+        return AXValueGetValue(v as! AXValue, .cgPoint, &p) ? p : nil
+    }
+
+    static func asSize(_ v: CFTypeRef?) -> CGSize? {
+        guard let v, CFGetTypeID(v) == AXValueGetTypeID() else { return nil }
+        var s = CGSize.zero
+        return AXValueGetValue(v as! AXValue, .cgSize, &s) ? s : nil
     }
 
     func element(_ name: String) -> AXUIElement? {
@@ -105,14 +141,16 @@ extension AXUIElement {
         return nil
     }
 
-    /// Roles from self upward, stopping before `ancestor`.
-    func roles(upTo ancestor: AXUIElement) -> [String] {
+    /// Roles from self upward, stopping before `ancestor` or after `limit`
+    /// levels. One request per level.
+    func roles(upTo ancestor: AXUIElement, limit: Int) -> [String] {
         var out: [String] = []
         var current: AXUIElement? = self
-        for _ in 0..<40 {
+        for _ in 0..<limit {
             guard let c = current, !CFEqual(c, ancestor) else { break }
-            if let r = c.role { out.append(r) }
-            current = c.parent
+            let v = c.attributes(["AXRole", "AXParent"])
+            if let r = v[0] as? String { out.append(r) }
+            current = AXUIElement.asElement(v[1])
         }
         return out
     }
