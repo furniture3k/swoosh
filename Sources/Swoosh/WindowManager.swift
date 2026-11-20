@@ -265,7 +265,7 @@ final class WindowManager {
     func debugDragWindow(at point: CGPoint) -> Bool { dragWindow(at: point) != nil }
 
     func debugDragReason(at point: CGPoint) -> String {
-        guard let win = dragWindow(at: point) else { return "no window title bar at point" }
+        guard let win = dragWindow(at: point)?.window else { return "no window title bar at point" }
         let mem = savedFrames[win] != nil
         let disk = savedFrame(for: win) != nil
         return "window found; saved in memory=\(mem) any saved=\(disk) state=\(String(describing: state(of: win))) frame=\(String(describing: win.frame)) memEntries=\(savedFrames.count)"
@@ -273,13 +273,16 @@ final class WindowManager {
 
     /// A snapped window grabbed by its title bar at `point`: returns it with the
     /// frame to restore (its pre-snap frame, or a default size).
-    func dragUnsnapCandidate(at point: CGPoint) -> (window: AXUIElement, frame: CGRect, saved: CGRect)? {
-        guard let win = dragWindow(at: point), let frame = win.frame, state(of: win) != nil else { return nil }
-        // No remembered size (e.g. the window was already maximized when it
-        // opened): fall back to a comfortable default, like Swish does.
-        let saved = savedFrame(for: win)
-            ?? Geometry.restoreFrame(saved: nil, area: workArea(for: frame))
-        return (win, frame, saved)
+    func dragUnsnapCandidate(at point: CGPoint) -> (window: AXUIElement, frame: CGRect, saved: CGRect, onControl: Bool)? {
+        guard let hit = dragWindow(at: point), let frame = hit.window.frame, state(of: hit.window) != nil else { return nil }
+        let area = workArea(for: frame)
+        var saved = savedFrame(for: hit.window) ?? Geometry.restoreFrame(saved: nil, area: area)
+        // A "pre-snap" size that is basically the snapped size is useless to
+        // restore to (e.g. the window was already full size, just offset).
+        if abs(saved.width - frame.width) < 40, abs(saved.height - frame.height) < 40 {
+            saved = Geometry.restoreFrame(saved: nil, area: area)
+        }
+        return (hit.window, frame, saved, hit.onControl)
     }
 
     // MARK: Remembered pre-snap frames
@@ -342,20 +345,62 @@ final class WindowManager {
         if all.count != before { UserDefaults.standard.set(all, forKey: Self.persistedKey) }
     }
 
+    /// Roles of controls that a press-and-drag operates on, rather than the window.
+    private static let controlRoles: Set<String> = [
+        "AXButton", "AXPopUpButton", "AXMenuButton", "AXTextField", "AXSearchField", "AXSecureTextField",
+        "AXCheckBox", "AXRadioButton", "AXSlider", "AXComboBox", "AXDisclosureTriangle", "AXIncrementor",
+        "AXLink", "AXTextArea", "AXSegmentedControl",
+    ]
+
     /// The window whose top strip (title bar / toolbar height) is under `point`.
     /// Unlike `titlebarWindow`, this ignores what kind of element was hit: some
     /// apps (VS Code and other Electron apps) expose their title bar as a scroll
     /// area. That's safe here because unsnapping only happens once the window
     /// actually moves.
-    private func dragWindow(at point: CGPoint) -> AXUIElement? {
+    private func dragWindow(at point: CGPoint) -> (window: AXUIElement, onControl: Bool)? {
         guard let el = AXUIElement.element(at: point), let pid = el.pid, pid != ownPID, pid != dockPID,
               !isExcluded(pid: pid) else { return nil }
         let own = el.attributes(["AXRole", "AXWindow"])
-        guard let win = (own[0] as? String) == "AXWindow" ? el : (AXUIElement.asElement(own[1]) ?? el.windowAncestor()),
+        let role = own[0] as? String
+        guard let win = role == "AXWindow" ? el : (AXUIElement.asElement(own[1]) ?? el.windowAncestor()),
               let frame = win.frame, frame.contains(point) else { return nil }
         let offsetY = point.y - frame.minY
         guard offsetY >= 0, offsetY <= Prefs.titlebarHeight + 60, isEligible(win) else { return nil }
-        return win
+        return (win, role.map(Self.controlRoles.contains) ?? false)
+    }
+
+    /// The window server's number for an app's on-screen window with `frame`.
+    /// Used to follow a window while macOS drags it: during a real drag the
+    /// window server moves the window and the app (and its Accessibility
+    /// frame) only finds out when the drag ends.
+    func windowNumber(pid: pid_t, frame: CGRect) -> CGWindowID? {
+        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return nil }
+        for info in list {
+            guard (info[kCGWindowOwnerPID as String] as? pid_t) == pid,
+                  (info[kCGWindowLayer as String] as? Int) == 0,
+                  let b = info[kCGWindowBounds as String] as? [String: CGFloat],
+                  let number = info[kCGWindowNumber as String] as? CGWindowID else { continue }
+            let r = CGRect(x: b["X"] ?? 0, y: b["Y"] ?? 0, width: b["Width"] ?? 0, height: b["Height"] ?? 0)
+            if Geometry.approximatelyEqual(r, frame, tolerance: 4) { return number }
+        }
+        return nil
+    }
+
+    /// Live bounds of a window from the window server (top-left coordinates).
+    func serverBounds(_ number: CGWindowID) -> CGRect? {
+        guard let list = CGWindowListCreateDescriptionFromArray([NSNumber(value: number)] as CFArray) as? [[String: Any]],
+              let b = list.first?[kCGWindowBounds as String] as? [String: CGFloat] else { return nil }
+        return CGRect(x: b["X"] ?? 0, y: b["Y"] ?? 0, width: b["Width"] ?? 0, height: b["Height"] ?? 0)
+    }
+
+    /// After the drag ends: if the restored window isn't under the cursor
+    /// (the window server kept its own drag offset), put the grabbed point back.
+    func settleAfterDrag(_ win: AXUIElement, cursor: CGPoint, grabRatio: CGFloat, grabOffsetY: CGFloat) {
+        guard let f = win.frame else { return }
+        let inside = f.minX + 8 < cursor.x && cursor.x < f.maxX - 8 && f.minY <= cursor.y && cursor.y <= f.minY + 60
+        guard !inside else { return }
+        let target = CGRect(x: cursor.x - f.width * grabRatio, y: cursor.y - grabOffsetY, width: f.width, height: f.height)
+        win.setPosition(Geometry.clamp(target, to: workArea(for: target).union(Screens.fullArea(Screens.screen(for: target)))).origin)
     }
 
     /// Restores the pre-snap size while the user drags the window away.

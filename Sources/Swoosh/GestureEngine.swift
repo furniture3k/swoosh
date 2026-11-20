@@ -124,7 +124,10 @@ final class GestureEngine {
     private var mouseTap: CFMachPort?
     private var mouseSource: CFRunLoopSource?
     /// A snapped window grabbed by its title bar, waiting to see if it moves.
-    private var drag: (window: AXUIElement, start: CGPoint, origin: CGPoint, size: CGSize, ratio: CGFloat, saved: CGRect)?
+    private var drag: (window: AXUIElement, number: CGWindowID?, start: CGPoint, origin: CGPoint, size: CGSize,
+                       ratio: CGFloat, offsetY: CGFloat, saved: CGRect, onControl: Bool)?
+    /// A window just unsnapped mid-drag, to re-centre under the cursor on drop.
+    private var settle: (window: AXUIElement, ratio: CGFloat, offsetY: CGFloat)?
 
     /// A listen-only tap for mouse down / drag / up. Listen-only taps get a copy
     /// of each event and never hold it, so clicks are never delayed.
@@ -154,6 +157,7 @@ final class GestureEngine {
         switch rawType {
         case CGEventType.leftMouseDown.rawValue:
             drag = nil
+            settle = nil
             dragStats.mouseDowns += 1
             // ⇧ held: drag without unsnapping (Swish's secondary modifier).
             guard Prefs.enabled, Prefs.dragToUnsnap, !event.flags.contains(.maskShift) else { return }
@@ -161,7 +165,9 @@ final class GestureEngine {
             logDrag("candidate window, saved \(c.saved)")
             dragStats.candidates += 1
             let ratio = c.frame.width > 0 ? (event.location.x - c.frame.minX) / c.frame.width : 0.5
-            drag = (c.window, event.location, c.frame.origin, c.frame.size, ratio, c.saved)
+            let number = c.window.pid.flatMap { wm.windowNumber(pid: $0, frame: c.frame) }
+            drag = (c.window, number, event.location, c.frame.origin, c.frame.size, ratio,
+                    event.location.y - c.frame.minY, c.saved, c.onControl)
         case CGEventType.leftMouseDragged.rawValue:
             guard let d = drag else { return }
             let p = event.location
@@ -169,22 +175,45 @@ final class GestureEngine {
             guard moved >= 3 else { return }
             dragStats.moveChecks += 1
             // Only once the window itself is moving (not a click-drag on a toolbar control).
-            if let f = d.window.frame, hypot(f.minX - d.origin.x, f.minY - d.origin.y) >= 1 {
-                drag = nil
-                // macOS's own tiling may already have restored the window's size.
-                guard abs(f.width - d.size.width) < 4, abs(f.height - d.size.height) < 4 else {
-                    logDrag("window already resized by the system; leaving it")
-                    return
-                }
-                dragStats.unsnaps += 1
-                logDrag("unsnapping")
-                wm.unsnapForDrag(d.window, saved: d.saved, cursor: p, grabRatio: d.ratio)
-            } else if moved > 40 {
-                logDrag("pointer moved 40pt but window position didn't change (\(String(describing: d.window.frame)) vs \(d.origin))")
-                drag = nil
-            }
-        case CGEventType.leftMouseUp.rawValue:
+            // Where the window really is: the window server knows during a drag;
+            // the Accessibility frame only updates when the drag ends.
+            let live = d.number.flatMap { wm.serverBounds($0) } ?? d.window.frame
+            let windowMoved = live.map { hypot($0.minX - d.origin.x, $0.minY - d.origin.y) >= 1 } ?? false
+            // macOS waits a moment before it starts moving a window that fills the
+            // screen, so don't wait for it: a 10 pt drag that started on the
+            // title bar (not on a button or field) is a window drag.
+            let titleBarDrag = !d.onControl && moved >= 10
+            guard windowMoved || titleBarDrag else { return }
             drag = nil
+            // macOS's own tiling may already have restored the window's size.
+            if let f = live, abs(f.width - d.size.width) >= 4 || abs(f.height - d.size.height) >= 4 {
+                logDrag("window already resized by the system; leaving it")
+                return
+            }
+            dragStats.unsnaps += 1
+            logDrag("unsnapping (window moved: \(windowMoved), title bar drag: \(titleBarDrag))")
+            wm.unsnapForDrag(d.window, saved: d.saved, cursor: p, grabRatio: d.ratio)
+            settle = (d.window, d.ratio, min(d.offsetY, 40))
+        case CGEventType.leftMouseUp.rawValue:
+            if let d = drag {
+                drag = nil
+                // The window ended up somewhere else although we never saw it move
+                // (e.g. a quick flick that started on a control): unsnap now.
+                if let f = d.window.frame, hypot(f.minX - d.origin.x, f.minY - d.origin.y) >= 4,
+                   abs(f.width - d.size.width) < 4, abs(f.height - d.size.height) < 4 {
+                    logDrag("unsnapping at drop")
+                    wm.unsnapForDrag(d.window, saved: d.saved, cursor: event.location, grabRatio: d.ratio)
+                    settle = (d.window, d.ratio, min(d.offsetY, 40))
+                }
+            }
+            if let st = settle {
+                settle = nil
+                let cursor = event.location
+                // Let the window server finish the drop first.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                    self?.wm.settleAfterDrag(st.window, cursor: cursor, grabRatio: st.ratio, grabOffsetY: st.offsetY)
+                }
+            }
         case 0xFFFF_FFFE, 0xFFFF_FFFF:
             // Disabled by the system: only resume if access is still granted.
             if AXIsProcessTrusted(), let mouseTap { CGEvent.tapEnable(tap: mouseTap, enable: true) }
