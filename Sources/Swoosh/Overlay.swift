@@ -79,7 +79,20 @@ final class Overlay {
         }
     }
 
+    private var flashWork: DispatchWorkItem?
+
+    /// Briefly shows the target frame (feedback for keyboard shortcuts).
+    func flash(_ quartzFrame: CGRect, title: String) {
+        show(quartzFrame, title: title)
+        flashWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.hide() }
+        flashWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
+    }
+
     func hide() {
+        flashWork?.cancel()
+        flashWork = nil
         guard visible else { return }
         visible = false
         NSAnimationContext.runAnimationGroup({ ctx in

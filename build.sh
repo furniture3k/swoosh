@@ -1,13 +1,30 @@
 #!/bin/zsh
-# Builds Swoosh.app into ./build. Usage: ./build.sh [--install] [--run]
+# Runs the tests, then builds Swoosh.app into ./build.
+# Usage: ./build.sh [--skip-tests] [--install] [--run]
 set -euo pipefail
 cd "$(dirname "$0")"
+run_tests() {
+  # The Command Line Tools' macro plugin server occasionally fails to load
+  # swift-testing's macros when many files compile in parallel. Retry only that
+  # specific toolchain error; genuine test failures still stop the build.
+  local log=$(mktemp)
+  for attempt in 1 2 3; do
+    if swift test --scratch-path .build/tests 2>&1 | tee "$log" | grep -E '✔ Test run|✘|error:'; then :; fi
+    if grep -q '✔ Test run with' "$log"; then rm -f "$log"; return 0; fi
+    grep -q "plugin for module 'TestingMacros' not found" "$log" || { rm -f "$log"; return 1; }
+    echo "Retrying tests (toolchain macro plugin hiccup, attempt $attempt)…"
+  done
+  rm -f "$log"; return 1
+}
+if [[ " $* " != *" --skip-tests "* ]]; then run_tests; fi
+[[ -f Resources/AppIcon.icns ]] || swift Scripts/make-icon.swift Resources/AppIcon.icns
 swift build -c release
 APP=build/Swoosh.app
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/Swoosh "$APP/Contents/MacOS/Swoosh"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
+cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 # Use a stable signing identity if you have one (keeps the Accessibility grant
 # across rebuilds); otherwise ad-hoc sign.
 codesign --force --deep --sign "${SWOOSH_SIGN_IDENTITY:--}" "$APP"

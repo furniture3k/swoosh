@@ -1,23 +1,42 @@
-import AppKit
+import CoreGraphics
 
-enum Direction: String {
+public enum Direction: String, CaseIterable, Sendable {
     case left, right, up, down
+
+    public var isHorizontal: Bool { self == .left || self == .right }
 }
 
-/// Snap positions, expressed as fractions of a screen's visible area
+/// Which finer grid vertical swipes on a third lead to.
+public enum Grid: String, CaseIterable, Sendable {
+    /// 3×2: thirds split into top / bottom sixths.
+    case sixths
+    /// 3×3: thirds split into top / middle / bottom ninths.
+    case ninths
+}
+
+/// Snap positions, expressed as fractions of a screen's work area
 /// (x, y measured from the top-left).
-enum Layout: String, CaseIterable {
+public enum Layout: Hashable, Sendable {
     case leftHalf, rightHalf, topHalf, bottomHalf
     case topLeft, topRight, bottomLeft, bottomRight
     case leftThird, centerThird, rightThird, leftTwoThirds, rightTwoThirds
     case topLeftSixth, topCenterSixth, topRightSixth
     case bottomLeftSixth, bottomCenterSixth, bottomRightSixth
+    /// col and row are 0...2.
+    case ninth(col: Int, row: Int)
     case maximize, almostMaximize
 
-    private static let t: CGFloat = 1.0 / 3.0
+    public static let allCases: [Layout] = [
+        .leftHalf, .rightHalf, .topHalf, .bottomHalf,
+        .topLeft, .topRight, .bottomLeft, .bottomRight,
+        .leftThird, .centerThird, .rightThird, .leftTwoThirds, .rightTwoThirds,
+        .topLeftSixth, .topCenterSixth, .topRightSixth,
+        .bottomLeftSixth, .bottomCenterSixth, .bottomRightSixth,
+        .maximize, .almostMaximize,
+    ] + (0..<3).flatMap { row in (0..<3).map { col in Layout.ninth(col: col, row: row) } }
 
-    var unit: CGRect {
-        let t = Layout.t
+    public var unit: CGRect {
+        let t: CGFloat = 1.0 / 3.0
         switch self {
         case .leftHalf: return CGRect(x: 0, y: 0, width: 0.5, height: 1)
         case .rightHalf: return CGRect(x: 0.5, y: 0, width: 0.5, height: 1)
@@ -38,28 +57,30 @@ enum Layout: String, CaseIterable {
         case .bottomLeftSixth: return CGRect(x: 0, y: 0.5, width: t, height: 0.5)
         case .bottomCenterSixth: return CGRect(x: t, y: 0.5, width: t, height: 0.5)
         case .bottomRightSixth: return CGRect(x: 2 * t, y: 0.5, width: t, height: 0.5)
+        case .ninth(let c, let r): return CGRect(x: CGFloat(c) * t, y: CGFloat(r) * t, width: t, height: t)
         case .maximize: return CGRect(x: 0, y: 0, width: 1, height: 1)
         case .almostMaximize: return CGRect(x: 0.04, y: 0.04, width: 0.92, height: 0.92)
         }
     }
 
-    /// Target frame inside `area` (global top-left coordinates) with `gap` points
-    /// between windows and around the screen edge.
-    func rect(in area: CGRect, gap: CGFloat) -> CGRect {
+    /// Target frame inside `area` (top-left coordinates) with `gap` points
+    /// between windows and around the edge of the area.
+    public func rect(in area: CGRect, gap: CGFloat) -> CGRect {
         let u = unit
         if self == .almostMaximize {
             return CGRect(x: area.minX + area.width * u.minX, y: area.minY + area.height * u.minY,
                           width: area.width * u.width, height: area.height * u.height).integral
         }
-        let usable = area.insetBy(dx: gap / 2, dy: gap / 2)
+        let g = max(0, gap)
+        let usable = area.insetBy(dx: g / 2, dy: g / 2)
         let r = CGRect(x: usable.minX + usable.width * u.minX,
                        y: usable.minY + usable.height * u.minY,
                        width: usable.width * u.width,
                        height: usable.height * u.height)
-        return r.insetBy(dx: gap / 2, dy: gap / 2).integral
+        return r.insetBy(dx: g / 2, dy: g / 2).integral
     }
 
-    var title: String {
+    public var title: String {
         switch self {
         case .leftHalf: return "Left Half"
         case .rightHalf: return "Right Half"
@@ -80,43 +101,68 @@ enum Layout: String, CaseIterable {
         case .bottomLeftSixth: return "Bottom Left Sixth"
         case .bottomCenterSixth: return "Bottom Center Sixth"
         case .bottomRightSixth: return "Bottom Right Sixth"
+        case .ninth(let c, let r):
+            let cols = ["Left", "Center", "Right"], rows = ["Top", "Middle", "Bottom"]
+            return "\(rows[r]) \(cols[c]) Ninth"
         case .maximize: return "Maximize"
         case .almostMaximize: return "Almost Maximize"
         }
     }
+
+    /// Column (0...2) of a third-wide layout, if it is one.
+    var thirdColumn: Int? {
+        switch self {
+        case .leftThird, .topLeftSixth, .bottomLeftSixth: return 0
+        case .centerThird, .topCenterSixth, .bottomCenterSixth: return 1
+        case .rightThird, .topRightSixth, .bottomRightSixth: return 2
+        case .ninth(let c, _): return c
+        default: return nil
+        }
+    }
+
+    static func third(_ col: Int) -> Layout { [.leftThird, .centerThird, .rightThird][col] }
+    static func topSixth(_ col: Int) -> Layout { [.topLeftSixth, .topCenterSixth, .topRightSixth][col] }
+    static func bottomSixth(_ col: Int) -> Layout { [.bottomLeftSixth, .bottomCenterSixth, .bottomRightSixth][col] }
 }
 
-/// What a gesture will do when the fingers lift.
-enum Outcome: Equatable {
+/// What a gesture will do when it completes.
+public enum Outcome: Equatable, Sendable {
     case none
     case layout(Layout)
     case minimize
     case restore
     case moveScreen(Direction)
+    case minimizeAll
+    case unminimizeAll
 
-    var title: String {
+    public var title: String {
         switch self {
         case .none: return ""
         case .layout(let l): return l.title
         case .minimize: return "Minimize"
         case .restore: return "Restore"
         case .moveScreen(let d): return "Move to \(d.rawValue.capitalized) Screen"
+        case .minimizeAll: return "Minimize All Windows"
+        case .unminimizeAll: return "Restore Minimized Windows"
         }
     }
 }
 
-/// The swipe grammar: each swipe step moves the window from its current snap
-/// state to a neighbouring one, so repeated swipes walk through halves → thirds →
-/// two-thirds and halves + perpendicular swipes reach quarters and sixths.
-enum Grammar {
-    static func next(from state: Layout?, step: Direction) -> Outcome {
-        switch (state, step) {
-        // Unsnapped
-        case (nil, .left): return .layout(.leftHalf)
-        case (nil, .right): return .layout(.rightHalf)
-        case (nil, .up): return .layout(.maximize)
-        case (nil, .down): return .minimize
+/// The swipe grammar: each swipe step moves a window from its current snap
+/// state to a neighbouring one, so repeated swipes walk halves → thirds →
+/// two-thirds, and a perpendicular swipe reaches quarters, sixths or ninths.
+public enum Grammar {
+    public static func next(from state: Layout?, step: Direction, grid: Grid = .sixths) -> Outcome {
+        guard let state else {
+            switch step {
+            case .left: return .layout(.leftHalf)
+            case .right: return .layout(.rightHalf)
+            case .up: return .layout(.maximize)
+            case .down: return .minimize
+            }
+        }
 
+        switch (state, step) {
         // Halves
         case (.leftHalf, .left): return .layout(.leftThird)
         case (.leftHalf, .right): return .layout(.rightHalf)
@@ -135,8 +181,8 @@ enum Grammar {
         case (.bottomHalf, .left): return .layout(.bottomLeft)
         case (.bottomHalf, .right): return .layout(.bottomRight)
 
-        // Quarters: swiping toward an edge the quarter already touches expands it
-        // to the half along that edge; swiping away moves to the adjacent quarter.
+        // Quarters: toward an edge the quarter touches → the half along that
+        // edge; away from it → the adjacent quarter.
         case (.topLeft, .left): return .layout(.leftHalf)
         case (.topLeft, .up): return .layout(.topHalf)
         case (.topLeft, .right): return .layout(.topRight)
@@ -157,16 +203,18 @@ enum Grammar {
         // Thirds
         case (.leftThird, .left): return .layout(.leftTwoThirds)
         case (.leftThird, .right): return .layout(.centerThird)
-        case (.leftThird, .up): return .layout(.topLeftSixth)
-        case (.leftThird, .down): return .layout(.bottomLeftSixth)
         case (.centerThird, .left): return .layout(.leftThird)
         case (.centerThird, .right): return .layout(.rightThird)
-        case (.centerThird, .up): return .layout(.topCenterSixth)
-        case (.centerThird, .down): return .layout(.bottomCenterSixth)
         case (.rightThird, .right): return .layout(.rightTwoThirds)
         case (.rightThird, .left): return .layout(.centerThird)
-        case (.rightThird, .up): return .layout(.topRightSixth)
-        case (.rightThird, .down): return .layout(.bottomRightSixth)
+        case (.leftThird, .up), (.centerThird, .up), (.rightThird, .up):
+            let c = state.thirdColumn!
+            return .layout(grid == .ninths ? .ninth(col: c, row: 0) : Layout.topSixth(c))
+        case (.leftThird, .down), (.centerThird, .down), (.rightThird, .down):
+            let c = state.thirdColumn!
+            return .layout(grid == .ninths ? .ninth(col: c, row: 2) : Layout.bottomSixth(c))
+
+        // Two thirds
         case (.leftTwoThirds, .left): return .layout(.leftHalf)
         case (.leftTwoThirds, .right): return .layout(.rightThird)
         case (.rightTwoThirds, .right): return .layout(.rightHalf)
@@ -174,34 +222,39 @@ enum Grammar {
         case (.leftTwoThirds, .up), (.rightTwoThirds, .up): return .layout(.maximize)
         case (.leftTwoThirds, .down), (.rightTwoThirds, .down): return .minimize
 
-        // Sixths
-        case (.topLeftSixth, .up): return .layout(.leftThird)
-        case (.topCenterSixth, .up): return .layout(.centerThird)
-        case (.topRightSixth, .up): return .layout(.rightThird)
-        case (.bottomLeftSixth, .down): return .layout(.leftThird)
-        case (.bottomCenterSixth, .down): return .layout(.centerThird)
-        case (.bottomRightSixth, .down): return .layout(.rightThird)
-        case (.topLeftSixth, .down): return .layout(.bottomLeftSixth)
-        case (.topCenterSixth, .down): return .layout(.bottomCenterSixth)
-        case (.topRightSixth, .down): return .layout(.bottomRightSixth)
-        case (.bottomLeftSixth, .up): return .layout(.topLeftSixth)
-        case (.bottomCenterSixth, .up): return .layout(.topCenterSixth)
-        case (.bottomRightSixth, .up): return .layout(.topRightSixth)
-        case (.topLeftSixth, .right): return .layout(.topCenterSixth)
-        case (.topCenterSixth, .left): return .layout(.topLeftSixth)
-        case (.topCenterSixth, .right): return .layout(.topRightSixth)
-        case (.topRightSixth, .left): return .layout(.topCenterSixth)
-        case (.bottomLeftSixth, .right): return .layout(.bottomCenterSixth)
-        case (.bottomCenterSixth, .left): return .layout(.bottomLeftSixth)
-        case (.bottomCenterSixth, .right): return .layout(.bottomRightSixth)
-        case (.bottomRightSixth, .left): return .layout(.bottomCenterSixth)
-        case (.topLeftSixth, .left), (.bottomLeftSixth, .left),
-             (.topRightSixth, .right), (.bottomRightSixth, .right): return .none
+        // Sixths: vertical toward the sixth's edge → back to the third;
+        // the other way → the other row; horizontal → neighbouring column.
+        case (.topLeftSixth, _), (.topCenterSixth, _), (.topRightSixth, _):
+            let c = state.thirdColumn!
+            switch step {
+            case .up: return .layout(Layout.third(c))
+            case .down: return .layout(Layout.bottomSixth(c))
+            case .left: return c > 0 ? .layout(Layout.topSixth(c - 1)) : .none
+            case .right: return c < 2 ? .layout(Layout.topSixth(c + 1)) : .none
+            }
+        case (.bottomLeftSixth, _), (.bottomCenterSixth, _), (.bottomRightSixth, _):
+            let c = state.thirdColumn!
+            switch step {
+            case .down: return .layout(Layout.third(c))
+            case .up: return .layout(Layout.topSixth(c))
+            case .left: return c > 0 ? .layout(Layout.bottomSixth(c - 1)) : .none
+            case .right: return c < 2 ? .layout(Layout.bottomSixth(c + 1)) : .none
+            }
 
-        // Maximized
+        // Ninths: walk the 3×3 grid; pushing past the top or bottom row grows
+        // back into the column's third.
+        case (.ninth(let c, let r), _):
+            switch step {
+            case .up: return r == 0 ? .layout(Layout.third(c)) : .layout(.ninth(col: c, row: r - 1))
+            case .down: return r == 2 ? .layout(Layout.third(c)) : .layout(.ninth(col: c, row: r + 1))
+            case .left: return c > 0 ? .layout(.ninth(col: c - 1, row: r)) : .none
+            case .right: return c < 2 ? .layout(.ninth(col: c + 1, row: r)) : .none
+            }
+
+        // Maximized: down always minimizes (it never shrinks the window first).
         case (.maximize, .up): return .layout(.almostMaximize)
         case (.almostMaximize, .up): return .layout(.maximize)
-        case (.maximize, .down), (.almostMaximize, .down): return .restore
+        case (.maximize, .down), (.almostMaximize, .down): return .minimize
         case (.maximize, .left), (.almostMaximize, .left): return .layout(.leftHalf)
         case (.maximize, .right), (.almostMaximize, .right): return .layout(.rightHalf)
         }

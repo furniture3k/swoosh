@@ -32,15 +32,35 @@ SHA-256 of the main executable: `47ce2998…dcf8`.
 | Settings | `gridOffset`, `EnableTiledWindowMargins`, `sensitivitySlider`, `marginSelect`, `blacklist` (bundle IDs) | Gap, sensitivity and an excluded-app list. |
 | Third-party | Paddle.framework (licensing), Sparkle (updates), `Defaults` and `KeyboardShortcuts` Swift packages, PromiseKit | Not reproduced. |
 
+## Newer Swish releases (1.11 → 1.13.3)
+
+From the official appcast (`highlyopinionated.co/swish/appcast`, newest build 80,
+13 Sep 2026) and the product page. Which of them Swoosh has:
+
+| Swish change | Swoosh |
+|---|---|
+| 3×3 grid (ninths) | ✅ Settings › Gestures › "Third, then ↑ / ↓" |
+| Keyboard shortcuts with Arrow, WASD and IJKL keys | ✅ Settings › Keyboard |
+| 1.11: gestures disabled on scrollable sliders in toolbars | ✅ `TitlebarPolicy.blockingRoles` |
+| 1.11: no crash when minimizing its own settings window | ✅ Swoosh never acts on its own windows |
+| 1.12: Stage Manager auto-detection with an offset slider | ✅ |
+| 1.12: grid spacing synced with Sequoia tiling margins | ✅ "Match macOS tiling margins" |
+| 1.12: no re-snap after leaving full screen | ✅ Swoosh never re-snaps on its own |
+| 1.12: faster minimize/unminimize-all from the menu bar | ✅ Runs off the event thread |
+| 1.13.2: scrollable tab bars keep scrolling | ✅ Scroll areas near the pointer aren't captured |
+| Quick tutorial and checks for trackpad settings | ✅ Setup tab |
+| Pinch out in full screen to exit | ✅ |
+| Per-browser tab gestures (close or detach tab) | ❌ Depends on each browser's Accessibility support |
+| Moving windows between Spaces, Dock gestures, Native Sequoia tiling for 2×2 | ❌ Need private or fragile APIs |
+
 ## What Swoosh implements (design choices are mine)
 
 - A CGEventTap on scroll wheel (22), magnify (30) and smart magnify (32) events. Events are swallowed only when the gesture starts in a window's title-bar zone or targets a chained window.
 - A swipe grammar (`Layout.swift → Grammar`) covering halves, thirds, two-thirds, quarters, sixths, maximize, almost maximize, restore and minimize.
-- Pinch in closes the window (⌥ quits the app). Pinch out toggles full screen. Double tap unsnaps or centers the window. ⌃ + swipe moves the window to the next screen in that direction.
+- Pinch in closes the window (⌥ quits the app). Pinch out toggles full screen. Double tap unsnaps or centers the window. ⌃ + swipe moves the window to the next screen in that direction. Menu-bar swipes minimize or restore all windows on a screen.
 - A preview overlay, haptics, a configurable gap, swipe distance, title-bar zone height, chaining timeout and excluded apps, plus launch at login.
 
 ## Not implemented
 
-Ninths, tabs (close or detach), app cycling and per-app minimize/hide, Dock and
-menu-bar gestures, moving between Spaces, tap-and-hold (Force Touch), modifier
-remapping, the onboarding flow, licensing and updates.
+Tab gestures, app cycling and per-app hide, Dock gestures, moving between
+Spaces, tap-and-hold (Force Touch), modifier remapping, licensing and updates.

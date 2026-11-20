@@ -1,81 +1,127 @@
 import AppKit
 import ApplicationServices
 import SwiftUI
+import SwooshCore
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate {
     private let wm = WindowManager()
     private lazy var engine = GestureEngine(windowManager: wm)
+    private lazy var hotkeys = Hotkeys(engine: engine)
     private var statusItem: NSStatusItem!
     private var settingsWindow: NSWindow?
     private var permissionTimer: Timer?
+    private var lastHotkeyScheme: HotkeyScheme?
 
     func applicationDidFinishLaunching(_ note: Notification) {
         Prefs.registerDefaults()
         NSApp.setActivationPolicy(.accessory)
         setUpStatusItem()
+        applyHotkeys()
+
+        NotificationCenter.default.addObserver(self, selector: #selector(defaultsChanged),
+                                               name: UserDefaults.didChangeNotification, object: nil)
 
         if AXIsProcessTrusted() {
             engine.start()
         } else {
-            let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-            _ = AXIsProcessTrustedWithOptions(opts)
-            waitForPermission()
+            promptForAccessibility()
+        }
+        // Watch for the permission being granted or revoked while running.
+        permissionTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            self?.checkPermission()
+        }
+
+        if !Prefs.onboarded {
+            Prefs.onboarded = true
+            openSettings(tab: .setup)
         }
     }
 
-    private func waitForPermission() {
-        permissionTimer?.invalidate()
-        permissionTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] t in
-            guard AXIsProcessTrusted() else { return }
-            t.invalidate()
-            self?.engine.start()
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        // Opening the app again (Finder, Spotlight) shows Settings, since there is no Dock icon.
+        openSettings(tab: SettingsRouter.shared.tab)
+        return false
+    }
+
+    private func checkPermission() {
+        let trusted = AXIsProcessTrusted()
+        if trusted, !engine.isRunning { engine.start() }
+        if !trusted, engine.isRunning { engine.stop() }
+        updateIcon()
+    }
+
+    private func promptForAccessibility() {
+        let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+        _ = AXIsProcessTrustedWithOptions(opts)
+    }
+
+    @objc private func defaultsChanged() {
+        DispatchQueue.main.async { [weak self] in
             self?.updateIcon()
+            self?.applyHotkeys()
         }
+    }
+
+    private func applyHotkeys() {
+        let scheme = Prefs.hotkeys
+        guard scheme != lastHotkeyScheme else { return }
+        lastHotkeyScheme = scheme
+        hotkeys.apply(scheme)
     }
 
     // MARK: Menu bar
 
     private func setUpStatusItem() {
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        statusItem.behavior = .removalAllowed
         let menu = NSMenu()
         menu.delegate = self
         statusItem.menu = menu
         updateIcon()
     }
 
+    private var lastIconState: Bool?
+
     private func updateIcon() {
         let active = Prefs.enabled && AXIsProcessTrusted()
-        let name = active ? "rectangle.split.2x1.fill" : "rectangle.split.2x1"
-        let image = NSImage(systemSymbolName: name, accessibilityDescription: "Swoosh")
-        image?.isTemplate = true
-        statusItem.button?.image = image
-        statusItem.button?.appearsDisabled = !active
+        guard active != lastIconState else { return }
+        lastIconState = active
+        statusItem.button?.image = StatusIcon.image(active: active)
+        statusItem.button?.toolTip = active ? "Swoosh" : (AXIsProcessTrusted() ? "Swoosh (paused)" : "Swoosh needs Accessibility access")
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
         let trusted = AXIsProcessTrusted()
 
-        if !trusted {
-            let warn = NSMenuItem(title: "Grant Accessibility Access…", action: #selector(openAccessibility), keyEquivalent: "")
-            warn.target = self
-            warn.image = NSImage(systemSymbolName: "exclamationmark.triangle", accessibilityDescription: nil)
-            menu.addItem(warn)
-            menu.addItem(.separator())
-        }
+        let header = NSMenuItem(title: trusted ? (Prefs.enabled ? "Swoosh is on" : "Swoosh is paused") : "Swoosh needs Accessibility access",
+                                action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        menu.addItem(header)
 
-        let toggle = NSMenuItem(title: "Gestures Enabled", action: #selector(toggleEnabled), keyEquivalent: "")
-        toggle.target = self
-        toggle.state = Prefs.enabled ? .on : .off
-        toggle.isEnabled = trusted
-        menu.addItem(toggle)
+        if !trusted {
+            let grant = NSMenuItem(title: "Grant Access…", action: #selector(openAccessibility), keyEquivalent: "")
+            grant.target = self
+            grant.image = NSImage(systemSymbolName: "lock.open", accessibilityDescription: nil)
+            menu.addItem(grant)
+        } else {
+            let toggle = NSMenuItem(title: Prefs.enabled ? "Pause Gestures" : "Resume Gestures",
+                                    action: #selector(toggleEnabled), keyEquivalent: "")
+            toggle.target = self
+            toggle.image = NSImage(systemSymbolName: Prefs.enabled ? "pause.circle" : "play.circle", accessibilityDescription: nil)
+            menu.addItem(toggle)
+        }
         menu.addItem(.separator())
 
-        let settings = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
+        let settings = NSMenuItem(title: "Settings…", action: #selector(openSettingsFromMenu), keyEquivalent: ",")
         settings.target = self
         menu.addItem(settings)
+        let guide = NSMenuItem(title: "Gesture Guide", action: #selector(openGuide), keyEquivalent: "")
+        guide.target = self
+        menu.addItem(guide)
         menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "Quit Swoosh", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        let quit = NSMenuItem(title: "Quit Swoosh", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        menu.addItem(quit)
     }
 
     @objc private func toggleEnabled() {
@@ -84,29 +130,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func openAccessibility() {
-        let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-        _ = AXIsProcessTrustedWithOptions(opts)
-        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
-            NSWorkspace.shared.open(url)
-        }
-        waitForPermission()
+        promptForAccessibility()
+        SystemState.openAccessibilitySettings()
     }
 
-    @objc private func openSettings() {
+    @objc private func openSettingsFromMenu() { openSettings(tab: SettingsRouter.shared.tab) }
+    @objc private func openGuide() { openSettings(tab: .gestures) }
+
+    private func openSettings(tab: SettingsTab) {
+        SettingsRouter.shared.tab = tab
         if settingsWindow == nil {
-            let w = NSWindow(contentViewController: NSHostingController(rootView: SettingsView()))
-            w.title = "Swoosh Settings"
-            w.styleMask = [.titled, .closable]
+            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 540),
+                             styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
+            w.contentViewController = NSHostingController(rootView: SettingsView())
+            w.title = "Swoosh"
             w.isReleasedWhenClosed = false
+            w.delegate = self
             w.center()
             settingsWindow = w
         }
+        // Show in the Dock and app switcher while Settings is open.
+        NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         settingsWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        guard (notification.object as? NSWindow) === settingsWindow else { return }
+        NSApp.setActivationPolicy(.accessory)
     }
 }
 
 let app = NSApplication.shared
+if let i = CommandLine.arguments.firstIndex(of: "--render-settings"), i + 1 < CommandLine.arguments.count {
+    Prefs.registerDefaults()
+    app.setActivationPolicy(.accessory)
+    SettingsRenderer.render(to: CommandLine.arguments[i + 1])
+    exit(0)
+}
 let delegate = AppDelegate()
 app.delegate = delegate
 app.run()

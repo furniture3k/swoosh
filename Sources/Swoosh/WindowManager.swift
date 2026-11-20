@@ -1,96 +1,88 @@
 import AppKit
 import ApplicationServices
+import SwooshCore
 
-/// Finds windows under the cursor and applies gesture outcomes to them.
+/// Finds windows and applies gesture outcomes to them.
 final class WindowManager {
     /// Frames from before a window was first snapped, used by "Restore".
     private var savedFrames: [AXUIElement: CGRect] = [:]
+    /// The layout Swoosh last applied to a window and the frame that resulted.
+    /// Lets windows with a minimum size (which cannot match the exact layout
+    /// rect) still chain correctly.
+    private var lastSnap: [AXUIElement: (layout: Layout, frame: CGRect)] = [:]
     private let ownPID = ProcessInfo.processInfo.processIdentifier
+    private let bulkQueue = DispatchQueue(label: "swoosh.bulk", qos: .userInitiated)
 
     // MARK: Hit testing
 
-    /// The standard window whose title bar / toolbar region is under `point`.
-    func titlebarWindow(at point: CGPoint) -> AXUIElement? {
+    /// The window whose title bar / toolbar region is under `point`.
+    func titlebarWindow(at point: CGPoint, allowFullScreen: Bool = false) -> AXUIElement? {
         guard let el = AXUIElement.element(at: point),
               let win = el.windowAncestor(),
               let frame = win.frame,
-              isEligible(win) else { return nil }
-
-        let y = point.y - frame.minY
-        guard y >= 0, frame.contains(point) else { return nil }
-        let base = Prefs.titlebarHeight
-        if y <= base { return win }
-        // Unified toolbars and tab strips sit below the classic title bar height.
-        if y <= base + 60, el.hasAncestor(withRoleIn: ["AXToolbar", "AXTabGroup"], upTo: win) { return win }
-        if y <= base + 30, CFEqual(el, win) { return win }
-        return nil
+              isEligible(win, allowFullScreen: allowFullScreen) else { return nil }
+        let accepted = TitlebarPolicy.accepts(
+            offsetY: point.y - frame.minY,
+            windowHeight: frame.height,
+            baseHeight: Prefs.titlebarHeight,
+            ancestorRoles: el.roles(upTo: win),
+            hitIsWindow: CFEqual(el, win))
+        return accepted && frame.contains(point) ? win : nil
     }
 
-    func isEligible(_ win: AXUIElement) -> Bool {
+    func isEligible(_ win: AXUIElement, allowFullScreen: Bool = false) -> Bool {
         guard let pid = win.pid, pid != ownPID else { return false }
-        if win.bool("AXFullScreen") == true { return false }
+        if !allowFullScreen, isFullScreen(win) { return false }
         let sub = win.subrole
         guard sub == nil || sub == "AXStandardWindow" || sub == "AXDialog" else { return false }
-        if let bundle = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier,
-           Prefs.excludedApps.contains(bundle) { return false }
-        return true
+        return !isExcluded(pid: pid)
     }
 
+    private func isExcluded(pid: pid_t) -> Bool {
+        guard let bundle = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier else { return false }
+        return Prefs.excludedApps.contains(bundle)
+    }
+
+    func isFullScreen(_ win: AXUIElement) -> Bool { win.bool("AXFullScreen") ?? false }
     func isAlive(_ win: AXUIElement) -> Bool { win.frame != nil }
+
+    /// Focused window of the frontmost app (keyboard shortcuts act on it).
+    func frontmostWindow() -> AXUIElement? {
+        guard let app = NSWorkspace.shared.frontmostApplication, app.processIdentifier != ownPID else { return nil }
+        let el = AXUIElementCreateApplication(app.processIdentifier)
+        guard let win = el.element("AXFocusedWindow") ?? el.element("AXMainWindow"),
+              isEligible(win) else { return nil }
+        return win
+    }
 
     // MARK: State
 
-    func screen(of win: AXUIElement) -> NSScreen {
-        Screens.screen(for: win.frame ?? .zero)
-    }
+    func workArea(for frame: CGRect) -> CGRect { Screens.workArea(Screens.screen(for: frame)) }
 
     /// Which layout (if any) the window currently occupies.
-    func detect(_ win: AXUIElement) -> Layout? {
+    func state(of win: AXUIElement) -> Layout? {
         guard let f = win.frame else { return nil }
-        let area = Screens.visibleArea(screen(of: f))
-        let tol: CGFloat = 6
-        return Layout.allCases.first { l in
-            let r = l.rect(in: area, gap: Prefs.gap)
-            return abs(r.minX - f.minX) <= tol && abs(r.minY - f.minY) <= tol
-                && abs(r.width - f.width) <= tol && abs(r.height - f.height) <= tol
-        }
+        if let l = Geometry.detect(frame: f, area: workArea(for: f), gap: Prefs.gap) { return l }
+        if let snap = lastSnap[win], Geometry.approximatelyEqual(snap.frame, f, tolerance: 2) { return snap.layout }
+        return nil
     }
-
-    private func screen(of frame: CGRect) -> NSScreen { Screens.screen(for: frame) }
 
     // MARK: Preview
 
-    /// Frame (Quartz coordinates) the outcome would produce, for the overlay.
-    func previewFrame(_ outcome: Outcome, for win: AXUIElement) -> CGRect? {
-        guard let f = win.frame else { return nil }
-        let scr = screen(of: f)
-        let area = Screens.visibleArea(scr)
+    /// Frame the outcome would produce, for the overlay.
+    func previewFrame(_ outcome: Outcome, for win: AXUIElement?) -> CGRect? {
+        guard let win, let f = win.frame else { return nil }
+        let area = workArea(for: f)
         switch outcome {
-        case .none: return nil
+        case .none, .minimizeAll, .unminimizeAll: return nil
         case .layout(let l): return l.rect(in: area, gap: Prefs.gap)
-        case .restore: return restoreFrame(for: win, current: f, area: area)
-        case .minimize:
-            let w = min(f.width, area.width) * 0.25, h = min(f.height, area.height) * 0.25
-            return CGRect(x: area.midX - w / 2, y: area.maxY - h - 12, width: w, height: h)
+        case .restore: return Geometry.restoreFrame(saved: savedFrames[win], area: area)
+        case .minimize: return Geometry.minimizePreview(for: f, in: area)
         case .moveScreen(let d):
+            let scr = Screens.screen(for: f)
             guard let target = Screens.neighbor(of: scr, d) else { return nil }
-            return Screens.map(f, from: area, to: Screens.visibleArea(target))
+            return Geometry.map(f, from: Screens.workArea(scr), to: Screens.workArea(target))
         }
-    }
-
-    private func restoreFrame(for win: AXUIElement, current: CGRect, area: CGRect) -> CGRect {
-        if let saved = savedFrames[win] {
-            // Keep the saved size but bring it onto the current screen.
-            var r = saved
-            r.size.width = min(r.width, area.width)
-            r.size.height = min(r.height, area.height)
-            if !area.intersects(r) || !area.contains(CGPoint(x: r.midX, y: r.minY + 10)) {
-                r.origin = CGPoint(x: area.midX - r.width / 2, y: area.midY - r.height / 2)
-            }
-            return r.integral
-        }
-        let w = area.width * 0.6, h = area.height * 0.7
-        return CGRect(x: area.midX - w / 2, y: area.midY - h / 2, width: w, height: h).integral
     }
 
     // MARK: Actions
@@ -98,67 +90,109 @@ final class WindowManager {
     func apply(_ outcome: Outcome, to win: AXUIElement) {
         guard let f = win.frame else { return }
         switch outcome {
-        case .none: return
+        case .none, .minimizeAll, .unminimizeAll:
+            return
         case .layout(let l):
-            if detect(win) == nil { savedFrames[win] = f }
-            let area = Screens.visibleArea(screen(of: f))
-            setFrame(win, l.rect(in: area, gap: Prefs.gap))
+            if state(of: win) == nil { savedFrames[win] = f }
+            let target = l.rect(in: workArea(for: f), gap: Prefs.gap)
+            let result = setFrame(win, target)
+            lastSnap[win] = (l, result)
         case .restore:
-            let area = Screens.visibleArea(screen(of: f))
-            setFrame(win, restoreFrame(for: win, current: f, area: area))
+            setFrame(win, Geometry.restoreFrame(saved: savedFrames[win], area: workArea(for: f)))
             savedFrames[win] = nil
+            lastSnap[win] = nil
         case .minimize:
             win.set("AXMinimized", kCFBooleanTrue)
         case .moveScreen:
             guard let target = previewFrame(outcome, for: win) else { return }
-            setFrame(win, target)
+            let previous = state(of: win)
+            let result = setFrame(win, target)
+            // Keep a snapped window snapped to the same layout on the new screen.
+            if let previous {
+                let exact = previous.rect(in: workArea(for: result), gap: Prefs.gap)
+                lastSnap[win] = (previous, setFrame(win, exact))
+            }
         }
         if outcome != .minimize, Prefs.activateAfterSnap { focus(win) }
-        trimSavedFrames()
+        trimCaches()
         Prefs.countSwoosh()
     }
 
     /// Double tap: unsnap a snapped window, otherwise centre it.
     func unsnapOrCenter(_ win: AXUIElement) {
         guard let f = win.frame else { return }
-        if detect(win) != nil {
+        if state(of: win) != nil {
             apply(.restore, to: win)
             return
         }
-        let area = Screens.visibleArea(screen(of: f))
-        let w = min(f.width, area.width), h = min(f.height, area.height)
-        setFrame(win, CGRect(x: area.midX - w / 2, y: area.midY - h / 2, width: w, height: h).integral)
+        setFrame(win, Geometry.centered(f.size, in: workArea(for: f)))
         if Prefs.activateAfterSnap { focus(win) }
         Prefs.countSwoosh()
     }
 
     func close(_ win: AXUIElement) {
-        if let button = win.element("AXCloseButton") { button.perform("AXPress") }
+        guard let button = win.element("AXCloseButton"), button.perform("AXPress") else {
+            NSSound.beep()
+            return
+        }
         Prefs.countSwoosh()
     }
 
     func quitApp(_ win: AXUIElement) {
-        guard let pid = win.pid else { return }
-        NSRunningApplication(processIdentifier: pid)?.terminate()
+        guard let pid = win.pid, let app = NSRunningApplication(processIdentifier: pid),
+              app.bundleIdentifier != "com.apple.finder" else { NSSound.beep(); return }
+        app.terminate()
         Prefs.countSwoosh()
     }
 
     func toggleFullScreen(_ win: AXUIElement) {
-        let isFull = win.bool("AXFullScreen") ?? false
-        if !win.set("AXFullScreen", isFull ? kCFBooleanFalse : kCFBooleanTrue) {
+        let full = isFullScreen(win)
+        if !win.set("AXFullScreen", full ? kCFBooleanFalse : kCFBooleanTrue) {
             win.element("AXFullScreenButton")?.perform("AXPress")
         }
         Prefs.countSwoosh()
     }
 
-    private func setFrame(_ win: AXUIElement, _ rect: CGRect) {
-        // Some apps animate AX-driven resizes when "enhanced UI" is on (set by
-        // VoiceOver-like clients); switch it off for the move, then restore.
+    /// Minimizes every window on `screen` (menu bar swipe down).
+    func minimizeAll(on screen: NSScreen) { bulk(on: screen, minimize: true) }
+
+    /// Restores every minimized window that belongs to `screen` (menu bar swipe up).
+    func unminimizeAll(on screen: NSScreen) { bulk(on: screen, minimize: false) }
+
+    private func bulk(on screen: NSScreen, minimize: Bool) {
+        let screens = NSScreen.screens.map(Screens.fullArea)
+        guard let index = NSScreen.screens.firstIndex(of: screen) else { return }
+        let excluded = Prefs.excludedApps
+        let apps = NSWorkspace.shared.runningApplications.filter {
+            $0.activationPolicy == .regular && $0.processIdentifier != ownPID
+                && !excluded.contains($0.bundleIdentifier ?? "")
+        }.map(\.processIdentifier)
+        // AX calls to many apps can be slow; keep them off the event-tap thread.
+        bulkQueue.async {
+            for pid in apps {
+                for win in AXUIElementCreateApplication(pid).windows {
+                    guard win.subrole == "AXStandardWindow", let f = win.frame,
+                          Geometry.bestIndex(for: f, in: screens) == index else { continue }
+                    let isMin = win.bool("AXMinimized") ?? false
+                    if minimize, !isMin { win.set("AXMinimized", kCFBooleanTrue) }
+                    if !minimize, isMin { win.set("AXMinimized", kCFBooleanFalse) }
+                }
+            }
+        }
+        Prefs.countSwoosh()
+    }
+
+    /// Sets the frame and returns the frame the window actually ended up with.
+    @discardableResult
+    private func setFrame(_ win: AXUIElement, _ rect: CGRect) -> CGRect {
+        // Apps animate AX-driven resizes while "enhanced UI" is on (set by
+        // assistive clients); switch it off for the move, then restore it.
         let app = win.pid.map { AXUIElementCreateApplication($0) }
         let enhanced = app?.bool("AXEnhancedUserInterface") ?? false
         if enhanced { app?.set("AXEnhancedUserInterface", kCFBooleanFalse) }
         win.setFrame(rect)
         if enhanced { app?.set("AXEnhancedUserInterface", kCFBooleanTrue) }
+        return win.frame ?? rect
     }
 
     private func focus(_ win: AXUIElement) {
@@ -166,9 +200,8 @@ final class WindowManager {
         if let pid = win.pid { NSRunningApplication(processIdentifier: pid)?.activate() }
     }
 
-    private func trimSavedFrames() {
-        if savedFrames.count > 200 {
-            savedFrames = savedFrames.filter { isAlive($0.key) }
-        }
+    private func trimCaches() {
+        if savedFrames.count > 100 { savedFrames = savedFrames.filter { isAlive($0.key) } }
+        if lastSnap.count > 100 { lastSnap = lastSnap.filter { isAlive($0.key) } }
     }
 }

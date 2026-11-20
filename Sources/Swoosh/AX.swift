@@ -105,14 +105,23 @@ extension AXUIElement {
         return nil
     }
 
-    /// True if any element between self and `ancestor` has one of the given roles.
-    func hasAncestor(withRoleIn roles: Set<String>, upTo ancestor: AXUIElement) -> Bool {
+    /// Roles from self upward, stopping before `ancestor`.
+    func roles(upTo ancestor: AXUIElement) -> [String] {
+        var out: [String] = []
         var current: AXUIElement? = self
         for _ in 0..<40 {
-            guard let c = current, !CFEqual(c, ancestor) else { return false }
-            if let r = c.role, roles.contains(r) { return true }
+            guard let c = current, !CFEqual(c, ancestor) else { break }
+            if let r = c.role { out.append(r) }
             current = c.parent
         }
-        return false
+        return out
+    }
+
+    /// Windows of an application element.
+    var windows: [AXUIElement] {
+        guard let arr = raw("AXWindows") as? [AnyObject] else { return [] }
+        return arr.compactMap { item in
+            CFGetTypeID(item) == AXUIElementGetTypeID() ? (item as! AXUIElement) : nil
+        }
     }
 }

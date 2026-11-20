@@ -1,12 +1,13 @@
 import AppKit
 import ApplicationServices
+import SwooshCore
 
 /// Intercepts trackpad scroll / pinch / smart-zoom events through a CGEventTap.
-/// When a gesture starts over a window's title bar it is swallowed (the app never
-/// sees it) and translated into window actions.
+/// When a gesture starts over a window's title bar (or the menu bar) it is
+/// swallowed, so the app never sees it, and turned into window actions.
 final class GestureEngine {
     private let wm: WindowManager
-    private let overlay = Overlay()
+    let overlay = Overlay()
     private var tap: CFMachPort?
     private var source: CFRunLoopSource?
 
@@ -26,28 +27,24 @@ final class GestureEngine {
     }
 
     private struct Swipe {
-        let window: AXUIElement
-        let screenMove: Bool
-        var accX: CGFloat = 0
-        var accY: CGFloat = 0
-        var lastStep: Direction?
-        var state: Layout?
-        var outcome: Outcome = .none
-        var history: [(Outcome, Layout?)] = []
+        var session: SwipeSession
+        let window: AXUIElement?
+        let screen: NSScreen?
     }
 
     private struct Pinch {
         let window: AXUIElement
         var total: CGFloat = 0
-        var label: String = ""
+        var label = ""
     }
 
     private var swipe: Swipe?
     private var pinch: Pinch?
     private var swallowMomentum = false
-    /// The window most recently acted on keeps receiving gestures (even away from
-    /// its title bar) for a short time, so swipes can be chained after it moves.
-    private var chained: (window: AXUIElement, until: TimeInterval)?
+    /// The window most recently acted on keeps receiving gestures (even away
+    /// from its title bar) for a moment, while the pointer stays put, so swipes
+    /// can be chained after the window moves out from under the pointer.
+    private var chained: (window: AXUIElement, anchor: CGPoint, until: TimeInterval)?
 
     init(windowManager: WindowManager) { wm = windowManager }
 
@@ -79,7 +76,7 @@ final class GestureEngine {
     func stop() {
         if let tap { CGEvent.tapEnable(tap: tap, enable: false); CFMachPortInvalidate(tap) }
         if let source { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
-        tap = nil; source = nil; swipe = nil; pinch = nil
+        tap = nil; source = nil; swipe = nil; pinch = nil; chained = nil
         overlay.hide()
     }
 
@@ -90,6 +87,9 @@ final class GestureEngine {
         switch rawType {
         case EventType.tapDisabledByTimeout, EventType.tapDisabledByUserInput:
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
+            // Whatever was in flight is lost; don't leave a stale preview behind.
+            swipe = nil; pinch = nil
+            overlay.hide()
             return pass
         default: break
         }
@@ -98,24 +98,27 @@ final class GestureEngine {
         let consumed: Bool
         switch rawType {
         case EventType.scrollWheel: consumed = handleScroll(event)
-        case EventType.magnify: consumed = handleMagnify(event)
-        case EventType.smartMagnify: consumed = handleSmartMagnify(event)
+        case EventType.magnify: consumed = Prefs.pinchGestures && handleMagnify(event)
+        case EventType.smartMagnify: consumed = Prefs.doubleTapGesture && handleSmartMagnify(event)
         default: consumed = false
         }
         return consumed ? nil : pass
     }
 
-    private func targetWindow(at point: CGPoint) -> AXUIElement? {
-        if let c = chained, ProcessInfo.processInfo.systemUptime < c.until, wm.isAlive(c.window) {
+    private var now: TimeInterval { ProcessInfo.processInfo.systemUptime }
+
+    private func targetWindow(at point: CGPoint, allowFullScreen: Bool = false) -> AXUIElement? {
+        if let c = chained, TitlebarPolicy.chainApplies(pointer: point, anchor: c.anchor, now: now, until: c.until),
+           wm.isAlive(c.window) {
             return c.window
         }
         chained = nil
-        return wm.titlebarWindow(at: point)
+        return wm.titlebarWindow(at: point, allowFullScreen: allowFullScreen)
     }
 
-    private func chain(_ win: AXUIElement) {
+    private func chain(_ win: AXUIElement, at point: CGPoint) {
         let t = Prefs.chainTimeout
-        chained = t > 0 ? (win, ProcessInfo.processInfo.systemUptime + t) : nil
+        chained = t > 0 ? (win, point, now + t) : nil
     }
 
     // MARK: Swipes (two-finger scroll)
@@ -136,10 +139,8 @@ final class GestureEngine {
             return false
         case Phase.began:
             swallowMomentum = false
-            guard swipe == nil, pinch == nil, let win = targetWindow(at: event.location) else { return false }
-            let screenMove = event.flags.contains(.maskControl)
-            swipe = Swipe(window: win, screenMove: screenMove, state: screenMove ? nil : wm.detect(win))
-            return true
+            guard swipe == nil, pinch == nil else { return swipe != nil }
+            return beginSwipe(event)
         case Phase.changed:
             guard swipe != nil else { return false }
             accumulate(event)
@@ -149,66 +150,76 @@ final class GestureEngine {
             swipe = nil
             swallowMomentum = true
             overlay.hide()
-            if phase == Phase.ended, s.outcome != .none {
-                wm.apply(s.outcome, to: s.window)
-                if s.outcome != .minimize { chain(s.window) } else { chained = nil }
-            }
+            if phase == Phase.ended { finish(s, at: event.location) }
             return true
         default:
             return swipe != nil
         }
     }
 
-    private func accumulate(_ event: CGEvent) {
-        guard var s = swipe, let ns = NSEvent(cgEvent: event) else { return }
-        // Normalise so +x = fingers moving right, +y = fingers moving down,
-        // regardless of the natural-scrolling setting.
-        let sign: CGFloat = ns.isDirectionInvertedFromDevice ? 1 : -1
-        s.accX += ns.scrollingDeltaX * sign
-        s.accY += ns.scrollingDeltaY * sign
-
-        let threshold = max(10, Prefs.sensitivity)
-        if max(abs(s.accX), abs(s.accY)) >= threshold {
-            let dir: Direction = abs(s.accX) > abs(s.accY)
-                ? (s.accX > 0 ? .right : .left)
-                : (s.accY > 0 ? .down : .up)
-            s.accX = 0
-            s.accY = 0
-            // A long swipe in one direction counts once; a turn registers a new step.
-            if dir != s.lastStep {
-                s.lastStep = dir
-                step(&s, dir)
-            }
+    private func beginSwipe(_ event: CGEvent) -> Bool {
+        let point = event.location
+        let threshold = Prefs.sensitivity
+        if let win = targetWindow(at: point) {
+            let screenMove = event.flags.contains(.maskControl)
+            let session = SwipeSession(mode: screenMove ? .screenMove : .window,
+                                       origin: screenMove ? nil : wm.state(of: win),
+                                       grid: Prefs.grid, threshold: threshold)
+            swipe = Swipe(session: session, window: win, screen: nil)
+            return true
         }
-        swipe = s
+        if Prefs.menubarGestures, let screen = Screens.menuBarScreen(at: point) {
+            swipe = Swipe(session: SwipeSession(mode: .menubar, origin: nil, threshold: threshold),
+                          window: nil, screen: screen)
+            return true
+        }
+        return false
     }
 
-    private func step(_ s: inout Swipe, _ dir: Direction) {
-        let before = s.outcome
-        if s.screenMove {
-            s.outcome = .moveScreen(dir)
-        } else if s.outcome == .minimize {
-            // Swiping back up after a pending minimize undoes it.
-            if dir == .up, let (o, st) = s.history.popLast() { s.outcome = o; s.state = st }
-        } else {
-            let next = Grammar.next(from: s.state, step: dir)
-            if next != .none {
-                s.history.append((s.outcome, s.state))
-                s.outcome = next
-                switch next {
-                case .layout(let l): s.state = l
-                case .restore: s.state = nil
-                default: break
-                }
-            }
-        }
-        guard s.outcome != before else { return }
+    private func accumulate(_ event: CGEvent) {
+        guard var s = swipe, let ns = NSEvent(cgEvent: event) else { return }
+        // Normalise so +x = fingers right, +y = fingers down, whatever the
+        // natural-scrolling setting.
+        let sign: CGFloat = ns.isDirectionInvertedFromDevice ? 1 : -1
+        let before = s.session.outcome
+        s.session.feed(dx: ns.scrollingDeltaX * sign, dy: ns.scrollingDeltaY * sign)
+        swipe = s
+        if s.session.outcome != before { showPreview(for: s) }
+    }
+
+    private func showPreview(for s: Swipe) {
         haptic()
-        if let frame = wm.previewFrame(s.outcome, for: s.window) {
-            overlay.show(frame, title: s.outcome.title)
+        let outcome = s.session.outcome
+        if let screen = s.screen {
+            guard outcome != .none else { overlay.hide(); return }
+            overlay.show(Screens.visibleArea(screen), title: outcome.title)
+        } else if let frame = wm.previewFrame(outcome, for: s.window) {
+            overlay.show(frame, title: outcome.title)
+        } else if case .moveScreen = outcome, let f = s.window?.frame {
+            overlay.show(f, title: "No Screen There")
         } else {
             overlay.hide()
         }
+    }
+
+    private func finish(_ s: Swipe, at point: CGPoint) {
+        let outcome = s.session.outcome
+        if let screen = s.screen {
+            switch outcome {
+            case .minimizeAll: wm.minimizeAll(on: screen)
+            case .unminimizeAll: wm.unminimizeAll(on: screen)
+            default: break
+            }
+            return
+        }
+        guard let win = s.window else { return }
+        if outcome == .none {
+            // Nothing happened, but keep the chain alive for a retry.
+            if chained != nil { chain(win, at: point) }
+            return
+        }
+        wm.apply(outcome, to: win)
+        if outcome == .minimize { chained = nil } else { chain(win, at: point) }
     }
 
     // MARK: Pinch
@@ -216,14 +227,14 @@ final class GestureEngine {
     private func handleMagnify(_ event: CGEvent) -> Bool {
         guard let ns = NSEvent(cgEvent: event) else { return false }
         if ns.phase.contains(.began) {
-            guard swipe == nil, let win = targetWindow(at: event.location) else { return false }
+            guard swipe == nil, let win = targetWindow(at: event.location, allowFullScreen: true) else { return false }
             pinch = Pinch(window: win)
             return true
         }
         guard var p = pinch else { return false }
         if ns.phase.contains(.changed) {
             p.total += ns.magnification
-            let label = pinchLabel(p.total, flags: event.flags)
+            let label = pinchLabel(p, flags: event.flags)
             if label != p.label {
                 p.label = label
                 if label.isEmpty { overlay.hide() } else if let f = p.window.frame {
@@ -249,9 +260,9 @@ final class GestureEngine {
 
     private let pinchThreshold: CGFloat = 0.25
 
-    private func pinchLabel(_ total: CGFloat, flags: CGEventFlags) -> String {
-        if total <= -pinchThreshold { return flags.contains(.maskAlternate) ? "Quit App" : "Close Window" }
-        if total >= pinchThreshold { return "Toggle Full Screen" }
+    private func pinchLabel(_ p: Pinch, flags: CGEventFlags) -> String {
+        if p.total <= -pinchThreshold { return flags.contains(.maskAlternate) ? "Quit App" : "Close Window" }
+        if p.total >= pinchThreshold { return wm.isFullScreen(p.window) ? "Exit Full Screen" : "Enter Full Screen" }
         return ""
     }
 
@@ -261,8 +272,27 @@ final class GestureEngine {
         guard swipe == nil, pinch == nil, let win = wm.titlebarWindow(at: event.location) else { return false }
         haptic()
         wm.unsnapOrCenter(win)
-        chain(win)
+        chain(win, at: event.location)
         return true
+    }
+
+    // MARK: Keyboard
+
+    /// One snap step on the frontmost window, chaining like repeated swipes.
+    func keyboardStep(_ dir: Direction, moveScreen: Bool) {
+        guard Prefs.enabled, let win = wm.frontmostWindow() else { NSSound.beep(); return }
+        var session = SwipeSession(mode: moveScreen ? .screenMove : .window,
+                                   origin: moveScreen ? nil : wm.state(of: win), grid: Prefs.grid)
+        session.step(dir)
+        let outcome = session.outcome
+        guard outcome != .none else { return }
+        if let f = wm.previewFrame(outcome, for: win), outcome != .minimize { overlay.flash(f, title: outcome.title) }
+        wm.apply(outcome, to: win)
+    }
+
+    func keyboardCenter() {
+        guard Prefs.enabled, let win = wm.frontmostWindow() else { NSSound.beep(); return }
+        wm.unsnapOrCenter(win)
     }
 
     private func haptic() {
