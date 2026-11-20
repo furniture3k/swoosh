@@ -264,11 +264,21 @@ final class WindowManager {
     /// Debug: would a drag starting at `point` be considered (ignoring saved frames)?
     func debugDragWindow(at point: CGPoint) -> Bool { dragWindow(at: point) != nil }
 
-    /// A window Swoosh snapped, grabbed by its title bar at `point`: returns it
-    /// with the frame it had before snapping. Cheap when nothing is snapped.
+    func debugDragReason(at point: CGPoint) -> String {
+        guard let win = dragWindow(at: point) else { return "no window title bar at point" }
+        let mem = savedFrames[win] != nil
+        let disk = savedFrame(for: win) != nil
+        return "window found; saved in memory=\(mem) any saved=\(disk) state=\(String(describing: state(of: win))) frame=\(String(describing: win.frame)) memEntries=\(savedFrames.count)"
+    }
+
+    /// A snapped window grabbed by its title bar at `point`: returns it with the
+    /// frame to restore (its pre-snap frame, or a default size).
     func dragUnsnapCandidate(at point: CGPoint) -> (window: AXUIElement, frame: CGRect, saved: CGRect)? {
-        guard hasSavedFrames, let win = dragWindow(at: point), let saved = savedFrame(for: win),
-              let frame = win.frame, state(of: win) != nil else { return nil }
+        guard let win = dragWindow(at: point), let frame = win.frame, state(of: win) != nil else { return nil }
+        // No remembered size (e.g. the window was already maximized when it
+        // opened): fall back to a comfortable default, like Swish does.
+        let saved = savedFrame(for: win)
+            ?? Geometry.restoreFrame(saved: nil, area: workArea(for: frame))
         return (win, frame, saved)
     }
 

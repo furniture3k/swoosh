@@ -1,10 +1,14 @@
 import AppKit
+import os
 import ApplicationServices
 import SwooshCore
 
 /// Intercepts trackpad scroll / pinch / smart-zoom events through a CGEventTap.
 /// Gestures that start over a window's title bar, a Dock icon or the menu bar
 /// are swallowed (the app underneath never sees them) and turned into actions.
+private let dragLog = Logger(subsystem: "com.joshuatrow.swoosh", category: "drag")
+private func logDrag(_ message: String) { dragLog.log("\(message, privacy: .public)") }
+
 final class GestureEngine {
     private let wm: WindowManager
     /// Created on first use, so an idle Swoosh owns no extra windows.
@@ -120,7 +124,7 @@ final class GestureEngine {
     private var mouseTap: CFMachPort?
     private var mouseSource: CFRunLoopSource?
     /// A snapped window grabbed by its title bar, waiting to see if it moves.
-    private var drag: (window: AXUIElement, start: CGPoint, origin: CGPoint, ratio: CGFloat, saved: CGRect)?
+    private var drag: (window: AXUIElement, start: CGPoint, origin: CGPoint, size: CGSize, ratio: CGFloat, saved: CGRect)?
 
     /// A listen-only tap for mouse down / drag / up. Listen-only taps get a copy
     /// of each event and never hold it, so clicks are never delayed.
@@ -135,7 +139,11 @@ final class GestureEngine {
         }
         guard let t = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .tailAppendEventTap, options: .listenOnly,
                                         eventsOfInterest: mask, callback: callback,
-                                        userInfo: Unmanaged.passUnretained(self).toOpaque()) else { return }
+                                        userInfo: Unmanaged.passUnretained(self).toOpaque()) else {
+            logDrag("could not create mouse tap")
+            return
+        }
+        logDrag("mouse tap running")
         mouseTap = t
         mouseSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, t, 0)
         CFRunLoopAddSource(CFRunLoopGetMain(), mouseSource, .commonModes)
@@ -148,11 +156,12 @@ final class GestureEngine {
             drag = nil
             dragStats.mouseDowns += 1
             // ⇧ held: drag without unsnapping (Swish's secondary modifier).
-            guard Prefs.enabled, Prefs.dragToUnsnap, !event.flags.contains(.maskShift),
-                  let c = wm.dragUnsnapCandidate(at: event.location) else { return }
+            guard Prefs.enabled, Prefs.dragToUnsnap, !event.flags.contains(.maskShift) else { return }
+            guard let c = wm.dragUnsnapCandidate(at: event.location) else { return }
+            logDrag("candidate window, saved \(c.saved)")
             dragStats.candidates += 1
             let ratio = c.frame.width > 0 ? (event.location.x - c.frame.minX) / c.frame.width : 0.5
-            drag = (c.window, event.location, c.frame.origin, ratio, c.saved)
+            drag = (c.window, event.location, c.frame.origin, c.frame.size, ratio, c.saved)
         case CGEventType.leftMouseDragged.rawValue:
             guard let d = drag else { return }
             let p = event.location
@@ -160,11 +169,18 @@ final class GestureEngine {
             guard moved >= 3 else { return }
             dragStats.moveChecks += 1
             // Only once the window itself is moving (not a click-drag on a toolbar control).
-            if let origin = d.window.position, hypot(origin.x - d.origin.x, origin.y - d.origin.y) >= 1 {
+            if let f = d.window.frame, hypot(f.minX - d.origin.x, f.minY - d.origin.y) >= 1 {
                 drag = nil
+                // macOS's own tiling may already have restored the window's size.
+                guard abs(f.width - d.size.width) < 4, abs(f.height - d.size.height) < 4 else {
+                    logDrag("window already resized by the system; leaving it")
+                    return
+                }
                 dragStats.unsnaps += 1
+                logDrag("unsnapping")
                 wm.unsnapForDrag(d.window, saved: d.saved, cursor: p, grabRatio: d.ratio)
             } else if moved > 40 {
+                logDrag("pointer moved 40pt but window position didn't change (\(String(describing: d.window.frame)) vs \(d.origin))")
                 drag = nil
             }
         case CGEventType.leftMouseUp.rawValue:

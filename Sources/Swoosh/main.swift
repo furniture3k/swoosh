@@ -383,7 +383,8 @@ if let i = CommandLine.arguments.firstIndex(of: "--drag-test"), i + 1 < CommandL
         try? (log + "no Finder window\n").write(toFile: out, atomically: true, encoding: .utf8); exit(1)
     }
     log += "original \(original)\n"
-    let dragOnly = CommandLine.arguments.contains("drag-only")
+    let dragOnly = CommandLine.arguments.contains("drag-only") || CommandLine.arguments.contains("post-only")
+    if CommandLine.arguments.contains("post-only") { engine.stop() } // only post events; let the real agent react
     if !dragOnly { wm.apply(.layout(.maximize), to: win) }
     wait(0.6)
     if CommandLine.arguments.contains("snap-only") {
