@@ -144,3 +144,7 @@ Set the keys under Settings › Keyboard: Arrow keys (the default), WASD, IJKL o
 To review the settings UI without Screen Recording permission, run
 `build/Swoosh.app/Contents/MacOS/Swoosh --render-settings <dir>`. It writes a
 PNG of every tab in light and dark mode.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
