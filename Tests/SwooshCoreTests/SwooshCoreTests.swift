@@ -343,6 +343,29 @@ struct GeometryTests {
         #expect(area.contains(dflt))
     }
 
+    @Test("Drag to unsnap: pre-snap size, grabbed point stays under the cursor")
+    func dragRestore() {
+        let maximized = CGRect(x: 0, y: 25, width: 1440, height: 875)
+        let saved = CGSize(width: 800, height: 600)
+        // Grabbed in the middle of a maximized window's title bar.
+        let r = Geometry.dragRestoreFrame(saved: saved, current: maximized, cursor: CGPoint(x: 720, y: 40),
+                                          grabRatio: 0.5, area: area)
+        #expect(r.size == saved)
+        #expect(r.minX == 320 && r.minY == 25)
+        #expect(r.minX < 720 && 720 < r.maxX)
+
+        // Grabbed near the far right of a right half: cursor still inside the title bar.
+        let rightHalf = Layout.rightHalf.rect(in: area, gap: 0)
+        let edge = Geometry.dragRestoreFrame(saved: saved, current: rightHalf, cursor: CGPoint(x: 1435, y: 40),
+                                             grabRatio: 0.995, area: area)
+        #expect(edge.minX < 1435 && edge.maxX >= 1435 + 20)
+
+        // A saved size bigger than the screen is shrunk to fit.
+        let huge = Geometry.dragRestoreFrame(saved: CGSize(width: 5000, height: 3000), current: maximized,
+                                             cursor: CGPoint(x: 700, y: 40), grabRatio: 0.5, area: area)
+        #expect(huge.width == area.width && huge.height == area.height)
+    }
+
     @Test func stageManagerInset() {
         let w = Geometry.workArea(visible: area, stageManagerInset: 120)
         #expect(w.minX == 120 && w.maxX == area.maxX)

@@ -94,6 +94,24 @@ public enum Geometry {
         return centered(saved.size, in: area)
     }
 
+    /// Frame for "Drag to Unsnap": the pre-snap size, placed so the point the
+    /// user grabbed stays under the cursor (same relative position across the
+    /// title bar), with the top edge where it is now. Kept on screen.
+    /// - Parameters:
+    ///   - grabRatio: where along the window's width the drag started (0...1).
+    public static func dragRestoreFrame(saved: CGSize, current: CGRect, cursor: CGPoint,
+                                        grabRatio: CGFloat, area: CGRect) -> CGRect {
+        let w = min(saved.width, area.width), h = min(saved.height, area.height)
+        let ratio = max(0, min(1, grabRatio))
+        var x = cursor.x - w * ratio
+        // Keep a margin of title bar on both sides of the cursor.
+        let margin = min(24, w / 4)
+        x = min(max(x, cursor.x - w + margin), cursor.x - margin)
+        // Don't push the window off the left / right of the screen it is on.
+        x = min(max(x, area.minX - w + 60), area.maxX - 60)
+        return CGRect(x: x.rounded(), y: current.minY.rounded(), width: w.rounded(), height: h.rounded())
+    }
+
     /// Shrunken preview used for "Minimize": a small card near the bottom centre.
     public static func minimizePreview(for frame: CGRect, in area: CGRect) -> CGRect {
         let w = min(frame.width, area.width) * 0.25, h = min(frame.height, area.height) * 0.25

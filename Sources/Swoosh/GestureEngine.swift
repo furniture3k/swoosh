@@ -97,6 +97,7 @@ final class GestureEngine {
         source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
+        startMouseTap()
         NSLog("Swoosh: event tap running")
         return true
     }
@@ -105,7 +106,68 @@ final class GestureEngine {
         if let tap { CGEvent.tapEnable(tap: tap, enable: false); CFMachPortInvalidate(tap) }
         if let source { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
         tap = nil; source = nil
+        if let mouseTap { CGEvent.tapEnable(tap: mouseTap, enable: false); CFMachPortInvalidate(mouseTap) }
+        if let mouseSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), mouseSource, .commonModes) }
+        mouseTap = nil; mouseSource = nil; drag = nil
         reset()
+    }
+
+    // MARK: Drag to unsnap
+
+    private var mouseTap: CFMachPort?
+    private var mouseSource: CFRunLoopSource?
+    /// A snapped window grabbed by its title bar, waiting to see if it moves.
+    private var drag: (window: AXUIElement, start: CGPoint, origin: CGPoint, ratio: CGFloat, saved: CGRect)?
+
+    /// A listen-only tap for mouse down / drag / up. Listen-only taps get a copy
+    /// of each event and never hold it, so clicks are never delayed.
+    private func startMouseTap() {
+        guard mouseTap == nil else { return }
+        let mask: CGEventMask = (1 << CGEventType.leftMouseDown.rawValue) | (1 << CGEventType.leftMouseDragged.rawValue)
+            | (1 << CGEventType.leftMouseUp.rawValue)
+        let callback: CGEventTapCallBack = { _, type, event, refcon in
+            let engine = Unmanaged<GestureEngine>.fromOpaque(refcon!).takeUnretainedValue()
+            engine.handleMouse(rawType: unsafeBitCast(type, to: UInt32.self), event: event)
+            return Unmanaged.passUnretained(event)
+        }
+        guard let t = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .tailAppendEventTap, options: .listenOnly,
+                                        eventsOfInterest: mask, callback: callback,
+                                        userInfo: Unmanaged.passUnretained(self).toOpaque()) else { return }
+        mouseTap = t
+        mouseSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, t, 0)
+        CFRunLoopAddSource(CFRunLoopGetMain(), mouseSource, .commonModes)
+        CGEvent.tapEnable(tap: t, enable: true)
+    }
+
+    private func handleMouse(rawType: UInt32, event: CGEvent) {
+        switch rawType {
+        case CGEventType.leftMouseDown.rawValue:
+            drag = nil
+            // ⇧ held: drag without unsnapping (Swish's secondary modifier).
+            guard Prefs.enabled, Prefs.dragToUnsnap, !event.flags.contains(.maskShift),
+                  let c = wm.dragUnsnapCandidate(at: event.location) else { return }
+            let ratio = c.frame.width > 0 ? (event.location.x - c.frame.minX) / c.frame.width : 0.5
+            drag = (c.window, event.location, c.frame.origin, ratio, c.saved)
+        case CGEventType.leftMouseDragged.rawValue:
+            guard let d = drag else { return }
+            let p = event.location
+            let moved = hypot(p.x - d.start.x, p.y - d.start.y)
+            guard moved >= 3 else { return }
+            // Only once the window itself is moving (not a click-drag on a toolbar control).
+            if let origin = d.window.position, hypot(origin.x - d.origin.x, origin.y - d.origin.y) >= 1 {
+                drag = nil
+                wm.unsnapForDrag(d.window, saved: d.saved, cursor: p, grabRatio: d.ratio)
+            } else if moved > 40 {
+                drag = nil
+            }
+        case CGEventType.leftMouseUp.rawValue:
+            drag = nil
+        case 0xFFFF_FFFE, 0xFFFF_FFFF:
+            // Disabled by the system: only resume if access is still granted.
+            if AXIsProcessTrusted(), let mouseTap { CGEvent.tapEnable(tap: mouseTap, enable: true) }
+        default:
+            break
+        }
     }
 
     private func reset() {

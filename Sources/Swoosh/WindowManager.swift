@@ -259,6 +259,27 @@ final class WindowManager {
         if minimizedOrder.count > 50 { minimizedOrder.removeFirst(minimizedOrder.count - 50) }
     }
 
+    // MARK: Drag to unsnap
+
+    /// A window Swoosh snapped, grabbed by its title bar at `point`: returns it
+    /// with the frame it had before snapping. Cheap when nothing is snapped.
+    func dragUnsnapCandidate(at point: CGPoint) -> (window: AXUIElement, frame: CGRect, saved: CGRect)? {
+        guard !savedFrames.isEmpty, let win = titlebarWindow(at: point), let saved = savedFrames[win],
+              let frame = win.frame, state(of: win) != nil else { return nil }
+        return (win, frame, saved)
+    }
+
+    /// Restores the pre-snap size while the user drags the window away.
+    func unsnapForDrag(_ win: AXUIElement, saved: CGRect, cursor: CGPoint, grabRatio: CGFloat) {
+        guard let current = win.frame else { return }
+        let target = Geometry.dragRestoreFrame(saved: saved.size, current: current, cursor: cursor,
+                                               grabRatio: grabRatio, area: workArea(for: current))
+        win.setSize(target.size)
+        win.setPosition(target.origin)
+        savedFrames[win] = nil
+        lastSnap[win] = nil
+    }
+
     // MARK: Actions
 
     func apply(_ outcome: Outcome, to win: AXUIElement) {

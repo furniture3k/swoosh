@@ -87,6 +87,7 @@ one gesture.
 | Pinch in / ⌥ pinch in | Close window / quit app | Same |
 | Pinch out | Enter or exit full screen | Same |
 | Double tap | Unsnap or center | Same |
+| Drag the title bar of a snapped window | Back to its size from before the swipe (⇧: keep the snapped size) | Same |
 | ⌃ + swipe | Move to the screen in that direction | Same |
 
 "Hold" means resting two fingers on the trackpad for a moment before swiping.

@@ -42,6 +42,7 @@ private struct GeneralSettings: View {
     @AppStorage(Prefs.Key.stageManagerOffset) private var stageOffset = 120.0
     @AppStorage(Prefs.Key.swooshCount) private var count = 0
     @AppStorage(Prefs.Key.showMenuBarIcon) private var menuBarIcon = true
+    @AppStorage(Prefs.Key.dragToUnsnap) private var dragToUnsnap = true
     @ObservedObject private var login = LoginItem.shared
 
     var body: some View {
@@ -69,6 +70,8 @@ private struct GeneralSettings: View {
                 Toggle("Haptic feedback", isOn: $haptics)
                 Toggle("Show snap preview", isOn: $showPreview)
                 Toggle("Bring window to front after snapping", isOn: $activateAfterSnap)
+                Toggle("Drag a snapped window to restore its size", isOn: $dragToUnsnap)
+                    .help("Grab a window you snapped and drag it: it goes back to the size it had before. Hold ⇧ while dragging to keep the snapped size.")
                 Picker("Follow-up swipes keep the same window for", selection: $chainTimeout) {
                     Text("Off").tag(0.0)
                     Text("0.6 seconds").tag(0.6)
@@ -137,6 +140,7 @@ private struct GestureSettings: View {
                 IconRow([.swipe(.up), .swipe(.up)], .layout(.topHalf), "Swipe up twice", grid == .halves ? "Top half" : "Top half (upper sixth on a third)")
                 IconRow([.hold, .swipe(.down)], .layout(.bottomHalf), "Hold, then swipe down", grid == .halves ? "Bottom half" : "Bottom half (lower sixth on a third)")
                 IconRow([.doubleTap], .restore, "Double tap", "Unsnap or center", enabled: doubleTap)
+                IconRow([], .restore, "Drag the title bar", "Back to the size before snapping (⇧: keep size)")
             }
             Section("Windows") {
                 IconRow([.swipe(.down)], .minimize, "Swipe down", "Minimize, instantly")
