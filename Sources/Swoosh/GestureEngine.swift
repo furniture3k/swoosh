@@ -114,6 +114,9 @@ final class GestureEngine {
 
     // MARK: Drag to unsnap
 
+    /// Counters for `--drag-test`.
+    var dragStats = (mouseDowns: 0, candidates: 0, moveChecks: 0, unsnaps: 0)
+
     private var mouseTap: CFMachPort?
     private var mouseSource: CFRunLoopSource?
     /// A snapped window grabbed by its title bar, waiting to see if it moves.
@@ -143,9 +146,11 @@ final class GestureEngine {
         switch rawType {
         case CGEventType.leftMouseDown.rawValue:
             drag = nil
+            dragStats.mouseDowns += 1
             // ⇧ held: drag without unsnapping (Swish's secondary modifier).
             guard Prefs.enabled, Prefs.dragToUnsnap, !event.flags.contains(.maskShift),
                   let c = wm.dragUnsnapCandidate(at: event.location) else { return }
+            dragStats.candidates += 1
             let ratio = c.frame.width > 0 ? (event.location.x - c.frame.minX) / c.frame.width : 0.5
             drag = (c.window, event.location, c.frame.origin, ratio, c.saved)
         case CGEventType.leftMouseDragged.rawValue:
@@ -153,9 +158,11 @@ final class GestureEngine {
             let p = event.location
             let moved = hypot(p.x - d.start.x, p.y - d.start.y)
             guard moved >= 3 else { return }
+            dragStats.moveChecks += 1
             // Only once the window itself is moving (not a click-drag on a toolbar control).
             if let origin = d.window.position, hypot(origin.x - d.origin.x, origin.y - d.origin.y) >= 1 {
                 drag = nil
+                dragStats.unsnaps += 1
                 wm.unsnapForDrag(d.window, saved: d.saved, cursor: p, grabRatio: d.ratio)
             } else if moved > 40 {
                 drag = nil

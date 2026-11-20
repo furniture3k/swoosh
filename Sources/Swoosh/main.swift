@@ -337,6 +337,45 @@ if let i = CommandLine.arguments.firstIndex(of: "--benchmark"), i + 1 < CommandL
     print(report, terminator: "")
     exit(0)
 }
+if let i = CommandLine.arguments.firstIndex(of: "--drag-test"), i + 1 < CommandLine.arguments.count {
+    // Snaps Finder's front window, then drags its title bar with synthetic events.
+    Prefs.registerDefaults()
+    app.setActivationPolicy(.accessory)
+    let out = CommandLine.arguments[i + 1]
+    let wm = WindowManager()
+    let engine = GestureEngine(windowManager: wm)
+    var log = "trusted=\(AXIsProcessTrusted()) tap=\(engine.start())\n"
+    func wait(_ t: TimeInterval) { RunLoop.main.run(until: Date().addingTimeInterval(t)) }
+    func post(_ type: CGEventType, _ p: CGPoint) {
+        CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: p, mouseButton: .left)?.post(tap: .cghidEventTap)
+    }
+    guard let finder = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.finder").first,
+          let win = AXUIElementCreateApplication(finder.processIdentifier).windows.first(where: { $0.subrole == "AXStandardWindow" }),
+          let original = win.frame else {
+        try? (log + "no Finder window\n").write(toFile: out, atomically: true, encoding: .utf8); exit(1)
+    }
+    log += "original \(original)\n"
+    let dragOnly = CommandLine.arguments.contains("drag-only")
+    if !dragOnly { wm.apply(.layout(.maximize), to: win) }
+    wait(0.6)
+    if CommandLine.arguments.contains("snap-only") {
+        try? (log + "snapped only\n").write(toFile: out, atomically: true, encoding: .utf8); exit(0)
+    }
+    let snapped = win.frame ?? .zero
+    log += "snapped \(snapped) state=\(String(describing: wm.state(of: win)))\n"
+    let grab = CGPoint(x: snapped.midX, y: snapped.minY + 14)
+    log += "candidate at grab: \(wm.dragUnsnapCandidate(at: grab) != nil)\n"
+    post(.leftMouseDown, grab); wait(0.15)
+    for step in 1...15 {
+        post(.leftMouseDragged, CGPoint(x: grab.x, y: grab.y + CGFloat(step) * 8)); wait(0.03)
+        if step == 6 { log += "mid-drag AX position \(String(describing: win.position))\n" }
+    }
+    post(.leftMouseUp, CGPoint(x: grab.x, y: grab.y + 120)); wait(0.6)
+    log += "final \(String(describing: win.frame))\nstats \(engine.dragStats)\n"
+    try? log.write(toFile: out, atomically: true, encoding: .utf8)
+    if !dragOnly, let f = win.frame, f.size != original.size { win.setFrame(original) }
+    exit(0)
+}
 if CommandLine.arguments.contains("--settings") {
     let settingsDelegate = SettingsAppDelegate()
     app.delegate = settingsDelegate

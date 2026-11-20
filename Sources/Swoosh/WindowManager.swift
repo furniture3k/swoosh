@@ -131,7 +131,7 @@ final class WindowManager {
             guard let target = Screens.neighbor(of: Screens.screen(for: f), d) else { return nil }
             return l.rect(in: Screens.workArea(target), gap: Prefs.gap)
         case .layout(let l): return l.rect(in: area, gap: Prefs.gap)
-        case .restore: return Geometry.restoreFrame(saved: savedFrames[win], area: area)
+        case .restore: return Geometry.restoreFrame(saved: savedFrame(for: win), area: area)
         case .minimize: return Geometry.minimizePreview(for: f, in: area)
         case .moveScreen(let d):
             let scr = Screens.screen(for: f)
@@ -264,9 +264,53 @@ final class WindowManager {
     /// A window Swoosh snapped, grabbed by its title bar at `point`: returns it
     /// with the frame it had before snapping. Cheap when nothing is snapped.
     func dragUnsnapCandidate(at point: CGPoint) -> (window: AXUIElement, frame: CGRect, saved: CGRect)? {
-        guard !savedFrames.isEmpty, let win = titlebarWindow(at: point), let saved = savedFrames[win],
+        guard hasSavedFrames, let win = titlebarWindow(at: point), let saved = savedFrame(for: win),
               let frame = win.frame, state(of: win) != nil else { return nil }
         return (win, frame, saved)
+    }
+
+    // MARK: Remembered pre-snap frames
+
+    /// Pre-snap frames also live on disk, keyed by app and window title, so a
+    /// window snapped before Swoosh restarted (e.g. after an update) can still
+    /// be dragged back to its old size.
+    private static let persistedKey = "preSnapFrames"
+
+    private var hasSavedFrames: Bool {
+        !savedFrames.isEmpty || !(UserDefaults.standard.dictionary(forKey: Self.persistedKey)?.isEmpty ?? true)
+    }
+
+    private func persistKey(for win: AXUIElement) -> String? {
+        guard let pid = win.pid, let bundle = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier else { return nil }
+        return bundle + "|" + (win.string("AXTitle") ?? "")
+    }
+
+    private func rememberFrame(_ frame: CGRect, for win: AXUIElement) {
+        savedFrames[win] = frame
+        guard let key = persistKey(for: win) else { return }
+        var all = UserDefaults.standard.dictionary(forKey: Self.persistedKey) ?? [:]
+        all[key] = [frame.minX, frame.minY, frame.width, frame.height, Date().timeIntervalSince1970]
+        if all.count > 60 {
+            // Drop the oldest entries.
+            let sorted = all.sorted { (($0.value as? [Double])?.last ?? 0) < (($1.value as? [Double])?.last ?? 0) }
+            for (k, _) in sorted.prefix(all.count - 60) { all[k] = nil }
+        }
+        UserDefaults.standard.set(all, forKey: Self.persistedKey)
+    }
+
+    private func savedFrame(for win: AXUIElement) -> CGRect? {
+        if let f = savedFrames[win] { return f }
+        guard let key = persistKey(for: win),
+              let v = UserDefaults.standard.dictionary(forKey: Self.persistedKey)?[key] as? [Double], v.count >= 4 else { return nil }
+        return CGRect(x: v[0], y: v[1], width: v[2], height: v[3])
+    }
+
+    private func forgetFrame(for win: AXUIElement) {
+        savedFrames[win] = nil
+        guard let key = persistKey(for: win),
+              var all = UserDefaults.standard.dictionary(forKey: Self.persistedKey), all[key] != nil else { return }
+        all[key] = nil
+        UserDefaults.standard.set(all, forKey: Self.persistedKey)
     }
 
     /// Restores the pre-snap size while the user drags the window away.
@@ -276,7 +320,7 @@ final class WindowManager {
                                                grabRatio: grabRatio, area: workArea(for: current))
         win.setSize(target.size)
         win.setPosition(target.origin)
-        savedFrames[win] = nil
+        forgetFrame(for: win)
         lastSnap[win] = nil
     }
 
@@ -288,13 +332,13 @@ final class WindowManager {
         case .none, .minimizeAll, .unminimizeAll:
             return
         case .layout(let l):
-            if state(of: win) == nil { savedFrames[win] = f }
+            if state(of: win) == nil { rememberFrame(f, for: win) }
             let target = l.rect(in: workArea(for: f), gap: Prefs.gap)
             let result = setFrame(win, target)
             lastSnap[win] = (l, result)
         case .restore:
-            setFrame(win, Geometry.restoreFrame(saved: savedFrames[win], area: workArea(for: f)))
-            savedFrames[win] = nil
+            setFrame(win, Geometry.restoreFrame(saved: savedFrame(for: win), area: workArea(for: f)))
+            forgetFrame(for: win)
             lastSnap[win] = nil
         case .minimize:
             minimize(win)
@@ -303,7 +347,7 @@ final class WindowManager {
             return
         case .layoutOnScreen(let l, let d):
             guard let target = Screens.neighbor(of: Screens.screen(for: f), d) else { return }
-            if state(of: win) == nil { savedFrames[win] = f }
+            if state(of: win) == nil { rememberFrame(f, for: win) }
             let rect = l.rect(in: Screens.workArea(target), gap: Prefs.gap)
             // Move first so the window is resized against the right screen.
             setFrame(win, CGRect(origin: rect.origin, size: f.size))
