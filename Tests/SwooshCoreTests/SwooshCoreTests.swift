@@ -38,7 +38,7 @@ struct GrammarTests {
     }
 
     @Test func sixthsAndNinthsFromThirds() {
-        #expect(Grammar.next(from: .centerThird, step: .up, grid: .sixths) == .layout(.topCenterSixth))
+        #expect(Grammar.next(from: .centerThird, step: .up, grid: .thirds) == .layout(.topCenterSixth))
         #expect(Grammar.next(from: .centerThird, step: .up, grid: .ninths) == .layout(.ninth(col: 1, row: 0)))
         #expect(Grammar.next(from: .rightThird, step: .down, grid: .ninths) == .layout(.ninth(col: 2, row: 2)))
     }
@@ -84,7 +84,7 @@ struct GrammarTests {
                 switch l {
                 case .ninth: return grid == .ninths
                 case .topLeftSixth, .topCenterSixth, .topRightSixth,
-                     .bottomLeftSixth, .bottomCenterSixth, .bottomRightSixth: return grid == .sixths
+                     .bottomLeftSixth, .bottomCenterSixth, .bottomRightSixth: return grid != .ninths
                 default: return true
                 }
             }
@@ -93,22 +93,127 @@ struct GrammarTests {
     }
 }
 
+// MARK: - Swish gesture rules
+
+private func resolve(_ steps: [Direction], origin: Layout? = nil, grid: Grid = .halves, hold: Bool = false,
+                     almost: Bool = false, fullScreen: Bool = false, screens: Set<Direction> = []) -> Outcome {
+    Resolver.resolve(steps, GestureContext(origin: origin, grid: grid, upFillsAlmost: almost, hold: hold,
+                                           isFullScreen: fullScreen, screens: screens))
+}
+
+@Suite("Swish gesture rules")
+struct ResolverTests {
+    @Test("Half, then a new swipe up, fills the screen (regression: went to a corner)")
+    func halfThenUpMaximizes() {
+        #expect(resolve([.up], origin: .leftHalf) == .layout(.maximize))
+        #expect(resolve([.up], origin: .topLeft) == .layout(.maximize))
+        #expect(resolve([.up], origin: .rightThird, grid: .thirds) == .layout(.maximize))
+    }
+
+    @Test("Swipe down once minimizes from any state")
+    func downMinimizes() {
+        for origin in [nil, .maximize, .leftHalf, .topRight, .almostMaximize] as [Layout?] {
+            #expect(resolve([.down], origin: origin) == .minimize)
+        }
+    }
+
+    @Test func halves() {
+        #expect(resolve([.left]) == .layout(.leftHalf))
+        #expect(resolve([.right], origin: .leftHalf) == .layout(.rightHalf))
+        #expect(resolve([.left, .left]) == .layout(.leftHalf))
+    }
+
+    @Test("Quarters: horizontal and vertical in one gesture, both orders")
+    func quartersBothOrders() {
+        #expect(resolve([.left, .up]) == .layout(.topLeft))
+        #expect(resolve([.up, .left]) == .layout(.topLeft))
+        #expect(resolve([.right, .down]) == .layout(.bottomRight))
+        #expect(resolve([.down, .right]) == .layout(.bottomRight))
+    }
+
+    @Test("Double swipe vertically: top / bottom half")
+    func doubleVertical() {
+        #expect(resolve([.up, .up]) == .layout(.topHalf))
+        #expect(resolve([.down, .down]) == .layout(.bottomHalf))
+    }
+
+    @Test func almostMaximizeSetting() {
+        #expect(resolve([.up], almost: true) == .layout(.almostMaximize))
+    }
+
+    @Test("Tap and hold, then swipe up: full screen")
+    func holdUpFullScreen() {
+        #expect(resolve([.up], hold: true) == .toggleFullScreen)
+        #expect(resolve([.down], fullScreen: true) == .toggleFullScreen)
+        #expect(resolve([.left], fullScreen: true) == .none)
+    }
+
+    @Test("Swiping toward the side a half already occupies moves it to the next screen")
+    func halfToNextScreen() {
+        #expect(resolve([.left], origin: .leftHalf, screens: [.left]) == .layoutOnScreen(.rightHalf, .left))
+        #expect(resolve([.left], origin: .leftHalf, screens: [.right]) == .layout(.leftHalf))
+    }
+
+    @Test("3×2: thirds toggle with two thirds; hold or both sides gives the middle third")
+    func thirds() {
+        #expect(resolve([.left], grid: .thirds) == .layout(.leftThird))
+        #expect(resolve([.left], origin: .leftThird, grid: .thirds) == .layout(.leftTwoThirds))
+        #expect(resolve([.left], origin: .leftTwoThirds, grid: .thirds) == .layout(.leftThird))
+        #expect(resolve([.left, .left], grid: .thirds) == .layout(.leftTwoThirds))
+        #expect(resolve([.right], grid: .thirds, hold: true) == .layout(.centerThird))
+        #expect(resolve([.left, .right], grid: .thirds) == .layout(.centerThird))
+    }
+
+    @Test("3×2: sixths from combined swipes, or double swipe on a third")
+    func sixths() {
+        #expect(resolve([.left, .up], grid: .thirds) == .layout(.topLeftSixth))
+        #expect(resolve([.down, .right], grid: .thirds) == .layout(.bottomRightSixth))
+        #expect(resolve([.up, .up], origin: .centerThird, grid: .thirds) == .layout(.topCenterSixth))
+        #expect(resolve([.up], origin: .centerThird, grid: .thirds) == .layout(.maximize))
+    }
+
+    @Test("3×3: every ninth is reachable")
+    func ninths() {
+        var reached: Set<Layout> = []
+        let sides: [[Direction]] = [[.left], [.right], [.left, .right]]
+        let rows: [[Direction]] = [[.up], [.down], [.up, .down]]
+        for h in sides { for v in rows { if case .layout(let l) = resolve(h + v, grid: .ninths) { reached.insert(l) } } }
+        for c in 0..<3 { for r in 0..<3 { #expect(reached.contains(.ninth(col: c, row: r)), "missing \(c),\(r)") } }
+    }
+
+    @Test("Only a pending minimize waits for a follow-up stroke")
+    func followUpWait() {
+        let ctx = GestureContext()
+        #expect(Resolver.waitsForFollowUp([.down], ctx))
+        #expect(!Resolver.waitsForFollowUp([.up], ctx))
+        #expect(!Resolver.waitsForFollowUp([.left], ctx))
+        #expect(!Resolver.waitsForFollowUp([.down, .down], ctx))
+    }
+
+    @Test func dockActions() {
+        #expect(DockAction.swipe(.up, secondary: false) == .unminimize(all: false))
+        #expect(DockAction.swipe(.up, secondary: true) == .unminimize(all: true))
+        #expect(DockAction.swipe(.down, secondary: false) == .minimize(all: false))
+        #expect(DockAction.swipe(.right, secondary: false) == .cycle(forward: true))
+    }
+
+    @Test func gridMigration() {
+        #expect(Grid(stored: "sixths") == .thirds)
+        #expect(Grid(stored: nil) == .halves)
+        #expect(Grid(stored: "ninths") == .ninths)
+        #expect(Grid(stored: "junk") == .halves)
+    }
+}
+
 // MARK: - Swipe session
 
 @Suite("Swipe session")
 struct SwipeSessionTests {
-    @Test("A single downward swipe on an unsnapped window is one minimize step")
+    @Test("One long swipe down is one step: minimize")
     func singleDown() {
         var s = SwipeSession(origin: nil, threshold: 40)
-        for _ in 0..<20 { s.feed(dx: 0, dy: 12) } // one long swipe
+        for _ in 0..<20 { s.feed(dx: 0, dy: 12) }
         #expect(s.steps == [.down])
-        #expect(s.outcome == .minimize)
-    }
-
-    @Test("A single downward swipe on a maximized window minimizes (regression)")
-    func downFromMaximized() {
-        var s = SwipeSession(origin: .maximize, threshold: 40)
-        for _ in 0..<10 { s.feed(dx: 0, dy: 10) }
         #expect(s.outcome == .minimize)
     }
 
@@ -120,7 +225,8 @@ struct SwipeSessionTests {
         #expect(s.outcome == .none)
     }
 
-    @Test func turningRegistersSecondStep() {
+    @Test("Turning mid-swipe adds a step: quarter")
+    func turning() {
         var s = SwipeSession(origin: nil, threshold: 40)
         s.feed(dx: -50, dy: 0)
         s.feed(dx: 0, dy: 50)
@@ -128,27 +234,16 @@ struct SwipeSessionTests {
         #expect(s.outcome == .layout(.bottomLeft))
     }
 
-    @Test("Up then sideways reaches the top quarters (both orders work)")
-    func bothOrders() {
-        var up = SwipeSession(origin: nil, threshold: 40)
-        up.feed(dx: 0, dy: -50)
-        up.feed(dx: 50, dy: 0)
-        #expect(up.outcome == .layout(.topRight))
-
-        var down = SwipeSession(origin: nil, threshold: 40)
-        down.feed(dx: 0, dy: 50)
-        down.feed(dx: -50, dy: 0)
-        #expect(down.outcome == .layout(.bottomLeft))
-    }
-
-    @Test func swipeBackUpUndoesMinimize() {
-        var s = SwipeSession(origin: .leftHalf, threshold: 40)
-        s.step(.down)           // bottom-left quarter
-        s.step(.down)           // bottom half
-        s.step(.down)           // minimize
-        #expect(s.outcome == .minimize)
-        s.step(.up)
-        #expect(s.outcome == .layout(.bottomHalf))
+    @Test("A second stroke in the same direction counts (double swipe)")
+    func doubleSwipeAcrossStrokes() {
+        var s = SwipeSession(origin: nil, threshold: 40)
+        s.feed(dx: 0, dy: -60)
+        #expect(s.outcome == .layout(.maximize))
+        s.beginStroke()
+        s.feed(dx: 0, dy: -60)
+        #expect(s.steps == [.up, .up])
+        #expect(s.outcome == .layout(.topHalf))
+        #expect(s.strokes == 2)
     }
 
     @Test func diagonalPicksDominantAxis() {
@@ -157,21 +252,25 @@ struct SwipeSessionTests {
         #expect(s.steps == [.down])
     }
 
-    @Test func screenAndMenubarModes() {
-        var screen = SwipeSession(mode: .screenMove, origin: nil, threshold: 40)
+    @Test func otherModes() {
+        var screen = SwipeSession(mode: .screenMove, threshold: 40)
         screen.feed(dx: 60, dy: 0)
         #expect(screen.outcome == .moveScreen(.right))
 
-        var menu = SwipeSession(mode: .menubar, origin: nil, threshold: 40)
+        var menu = SwipeSession(mode: .menubar, threshold: 40)
         menu.feed(dx: 0, dy: 60)
         #expect(menu.outcome == .minimizeAll)
         menu.feed(dx: 0, dy: -60)
         #expect(menu.outcome == .unminimizeAll)
+
+        var dock = SwipeSession(mode: .dock(secondary: false), threshold: 40)
+        dock.feed(dx: 0, dy: -60)
+        #expect(dock.dockAction == .unminimize(all: false))
+        #expect(dock.outcome == .none)
     }
 
     @Test func thresholdHasFloor() {
-        let s = SwipeSession(origin: nil, threshold: 0)
-        #expect(s.threshold == 10)
+        #expect(SwipeSession(origin: nil, threshold: 0).threshold == 10)
     }
 }
 

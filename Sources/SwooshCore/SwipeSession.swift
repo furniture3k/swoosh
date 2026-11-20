@@ -1,39 +1,50 @@
 import CoreGraphics
 
-/// Turns a stream of two-finger scroll deltas into discrete swipe steps and
-/// tracks the outcome the gesture will have when the fingers lift.
+/// Turns two-finger scroll deltas into discrete swipe steps. A session spans
+/// one gesture, which can be several strokes (fingers lifted in between) made
+/// in quick succession, such as a double swipe.
 public struct SwipeSession {
     public enum Mode: Equatable, Sendable {
-        /// Snap / minimize the window under the title bar.
+        /// Snap / minimize the window under the title bar (Swish rules, `Resolver`).
         case window
         /// Move the window to the neighbouring screen (modifier held).
         case screenMove
         /// Swipe on the menu bar: minimize / restore all windows on that screen.
         case menubar
+        /// Swipe on a Dock icon.
+        case dock(secondary: Bool)
     }
 
     public let mode: Mode
-    /// Snap state of the window when the gesture began (nil = unsnapped).
-    public let origin: Layout?
-    public let grid: Grid
+    public var context: GestureContext
     public let threshold: CGFloat
 
-    public private(set) var state: Layout?
-    public private(set) var outcome: Outcome = .none
-    /// Registered steps, in order.
+    /// Registered steps across all strokes, in order.
     public private(set) var steps: [Direction] = []
+    public private(set) var strokes = 0
 
     private var accX: CGFloat = 0
     private var accY: CGFloat = 0
     private var lastStep: Direction?
-    private var history: [(outcome: Outcome, state: Layout?)] = []
 
-    public init(mode: Mode = .window, origin: Layout?, grid: Grid = .sixths, threshold: CGFloat = 45) {
+    public init(mode: Mode = .window, context: GestureContext = GestureContext(), threshold: CGFloat = 45) {
         self.mode = mode
-        self.origin = origin
-        self.grid = grid
+        self.context = context
         self.threshold = max(10, threshold)
-        self.state = origin
+        strokes = 1
+    }
+
+    /// Convenience used by tests.
+    public init(origin: Layout?, grid: Grid = .halves, threshold: CGFloat = 45) {
+        self.init(context: GestureContext(origin: origin, grid: grid), threshold: threshold)
+    }
+
+    /// Starts another stroke in the same gesture (fingers lifted and put back).
+    public mutating func beginStroke() {
+        strokes += 1
+        accX = 0
+        accY = 0
+        lastStep = nil
     }
 
     /// Feeds one scroll delta, normalised so +dx = fingers right and
@@ -48,60 +59,44 @@ public struct SwipeSession {
             : (accY > 0 ? .down : .up)
         accX = 0
         accY = 0
-        // A long swipe in one direction counts once; turning registers a new step.
+        // Within a stroke, a long swipe in one direction counts once; turning
+        // registers a new step. A new stroke may repeat the direction (double swipe).
         guard dir != lastStep else { return nil }
         lastStep = dir
-        step(dir)
+        steps.append(dir)
         return dir
     }
 
-    /// Applies one step directly (used by keyboard shortcuts and by `feed`).
+    /// Adds a step directly (tests, keyboard).
     public mutating func step(_ dir: Direction) {
         steps.append(dir)
+        lastStep = dir
+    }
+
+    public var outcome: Outcome {
         switch mode {
-        case .screenMove:
-            outcome = .moveScreen(dir)
-        case .menubar:
-            if dir == .down { outcome = .minimizeAll } else if dir == .up { outcome = .unminimizeAll }
         case .window:
-            windowStep(dir)
+            return Resolver.resolve(steps, context)
+        case .screenMove:
+            return steps.last.map { .moveScreen($0) } ?? .none
+        case .menubar:
+            switch steps.last {
+            case .down?: return .minimizeAll
+            case .up?: return .unminimizeAll
+            default: return .none
+            }
+        case .dock:
+            return .none
         }
     }
 
-    private mutating func windowStep(_ dir: Direction) {
-        // "Both orders work": from an unsnapped window, up-then-sideways and
-        // down-then-sideways reach the quarters just like sideways-then-up/down.
-        if steps.count == 2, origin == nil, dir.isHorizontal, history.count == 1 {
-            let first = steps[0]
-            if first == .up || first == .down {
-                let quarter: Layout = first == .up
-                    ? (dir == .left ? .topLeft : .topRight)
-                    : (dir == .left ? .bottomLeft : .bottomRight)
-                push(.layout(quarter))
-                return
-            }
-        }
-
-        if outcome == .minimize {
-            // Swiping back up undoes a pending minimize.
-            if dir == .up, let previous = history.popLast() {
-                outcome = previous.outcome
-                state = previous.state
-            }
-            return
-        }
-
-        let next = Grammar.next(from: state, step: dir, grid: grid)
-        if next != .none { push(next) }
+    public var dockAction: DockAction {
+        guard case .dock(let secondary) = mode, let last = steps.last else { return .none }
+        return DockAction.swipe(last, secondary: secondary)
     }
 
-    private mutating func push(_ next: Outcome) {
-        history.append((outcome, state))
-        outcome = next
-        switch next {
-        case .layout(let l): state = l
-        case .restore: state = nil
-        default: break
-        }
+    /// The gesture should wait for a possible follow-up stroke before acting.
+    public var waitsForFollowUp: Bool {
+        mode == .window && Resolver.waitsForFollowUp(steps, context)
     }
 }

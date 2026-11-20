@@ -22,6 +22,9 @@ enum Prefs {
         static let doubleTapGesture = "doubleTapGesture"
         static let stageManagerOffset = "stageManagerOffset"
         static let onboarded = "onboarded"
+        static let upFillsAlmost = "upFillsAlmost"
+        static let dockGestures = "dockGestures"
+        static let showTooltip = "showTooltip"
     }
 
     static let defaultExcluded = [
@@ -45,7 +48,10 @@ enum Prefs {
             Key.activateAfterSnap: true,
             Key.excludedApps: defaultExcluded,
             Key.swooshCount: 0,
-            Key.grid: Grid.sixths.rawValue,
+            Key.grid: Grid.halves.rawValue,
+            Key.upFillsAlmost: false,
+            Key.dockGestures: true,
+            Key.showTooltip: true,
             Key.hotkeys: HotkeyScheme.arrows.rawValue,
             Key.menubarGestures: true,
             Key.pinchGestures: true,
@@ -67,7 +73,10 @@ enum Prefs {
     static var pinchGestures: Bool { d.bool(forKey: Key.pinchGestures) }
     static var doubleTapGesture: Bool { d.bool(forKey: Key.doubleTapGesture) }
     static var stageManagerOffset: CGFloat { CGFloat(d.double(forKey: Key.stageManagerOffset)) }
-    static var grid: Grid { Grid(rawValue: d.string(forKey: Key.grid) ?? "") ?? .sixths }
+    static var grid: Grid { Grid(stored: d.string(forKey: Key.grid)) }
+    static var upFillsAlmost: Bool { d.bool(forKey: Key.upFillsAlmost) }
+    static var dockGestures: Bool { d.bool(forKey: Key.dockGestures) }
+    static var showTooltip: Bool { d.bool(forKey: Key.showTooltip) }
     static var hotkeys: HotkeyScheme { HotkeyScheme(rawValue: d.string(forKey: Key.hotkeys) ?? "") ?? .off }
     static var onboarded: Bool {
         get { d.bool(forKey: Key.onboarded) }

@@ -25,9 +25,11 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/Swoosh "$APP/Contents/MacOS/Swoosh"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
-# Use a stable signing identity if you have one (keeps the Accessibility grant
-# across rebuilds); otherwise ad-hoc sign.
-codesign --force --deep --sign "${SWOOSH_SIGN_IDENTITY:--}" "$APP"
+# Sign with a stable identity when one exists, so macOS keeps the Accessibility
+# permission across rebuilds. Falls back to ad-hoc signing (re-grant each build).
+IDENTITY="${SWOOSH_SIGN_IDENTITY:-$(security find-identity -v -p codesigning 2>/dev/null | awk -F'"' '/Apple Development|Developer ID Application/ {print $2; exit}')}"
+codesign --force --deep --timestamp=none --sign "${IDENTITY:--}" "$APP"
+echo "Signed with: ${IDENTITY:-ad-hoc}"
 echo "Built $APP"
 if [[ " $* " == *" --install "* ]]; then
   pkill -x Swoosh 2>/dev/null || true

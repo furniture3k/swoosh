@@ -90,40 +90,115 @@ private struct GeneralSettings: View {
 // MARK: - Gestures
 
 private struct GestureSettings: View {
-    @AppStorage(Prefs.Key.grid) private var grid = Grid.sixths.rawValue
+    @AppStorage(Prefs.Key.grid) private var gridRaw = SwooshCore.Grid.halves.rawValue
+    @AppStorage(Prefs.Key.upFillsAlmost) private var almost = false
     @AppStorage(Prefs.Key.pinchGestures) private var pinch = true
     @AppStorage(Prefs.Key.doubleTapGesture) private var doubleTap = true
     @AppStorage(Prefs.Key.menubarGestures) private var menubar = true
+    @AppStorage(Prefs.Key.dockGestures) private var dock = true
+    @AppStorage(Prefs.Key.showTooltip) private var tooltip = true
+
+    private var grid: SwooshCore.Grid { SwooshCore.Grid(stored: gridRaw) }
 
     var body: some View {
         Form {
             Section {
-                Text("Put the pointer on a window's title bar or toolbar and swipe with two fingers. A preview shows where the window will go, and it moves when you lift your fingers. Change direction mid-swipe, or swipe again straight away, to keep going.")
+                Text("Swipe with two fingers on a window's title bar, a Dock icon or the menu bar. A tooltip shows what the gesture will do, and a preview shows where the window will land. Swipe again straight away to combine swipes.")
                     .font(.callout).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                Toggle("Show gesture tooltip", isOn: $tooltip)
             }
             Section("Snapping") {
-                GestureRow("← / →", "Left / right half")
-                GestureRow("Same way again", "Third, then two thirds, then half")
-                GestureRow("Other way from a third", "Move through the thirds")
-                GestureRow("Half, then ↑ / ↓", "Quarter (↑ / ↓ first, then sideways, works too)")
-                GestureRow("↑", "Maximize (again: almost maximize)")
-                GestureRow("↓", "Minimize")
-                GestureRow("⌃ + swipe", "Move to the screen in that direction")
-                Picker("Third, then ↑ / ↓", selection: $grid) {
-                    Text("Sixths (3 × 2 grid)").tag(Grid.sixths.rawValue)
-                    Text("Ninths (3 × 3 grid)").tag(Grid.ninths.rawValue)
+                Picker("Grid", selection: $gridRaw) {
+                    ForEach(SwooshCore.Grid.allCases, id: \.rawValue) { Text($0.title).tag($0.rawValue) }
                 }
+                .pickerStyle(.segmented)
+                Toggle("Swipe up fills almost the whole desktop", isOn: $almost)
+                if grid == .halves {
+                    IconRow([.swipe(.left)], .layout(.leftHalf), "Swipe left or right", "Left or right half")
+                    IconRow([.swipe(.left), .swipe(.up)], .layout(.topLeft), "Sideways and up or down", "Quarter, in either order")
+                } else {
+                    IconRow([.swipe(.left)], .layout(.leftThird), "Swipe left or right", "Third, again for two thirds")
+                    IconRow([.hold, .swipe(.right)], .layout(.centerThird), "Hold, then sideways", "Middle third (or swipe ← →)")
+                    if grid == .thirds {
+                        IconRow([.swipe(.left), .swipe(.up)], .layout(.topLeftSixth), "Sideways and up or down", "Sixth")
+                    } else {
+                        IconRow([.swipe(.left), .swipe(.up)], .layout(.ninth(col: 0, row: 0)), "Sideways and up or down", "Corner ninth")
+                        IconRow([.swipe(.left), .swipe(.up), .swipe(.down)], .layout(.ninth(col: 0, row: 1)), "Sideways, up and down", "Middle-row ninth")
+                    }
+                }
+                IconRow([.swipe(.up)], .layout(almost ? .almostMaximize : .maximize), "Swipe up", almost ? "Almost fill the desktop" : "Fill the desktop")
+                IconRow([.swipe(.up), .swipe(.up)], .layout(.topHalf), "Swipe up twice", grid == .halves ? "Top half" : "Top half (upper sixth on a third)")
+                IconRow([.swipe(.down), .swipe(.down)], .layout(.bottomHalf), "Swipe down twice", grid == .halves ? "Bottom half" : "Bottom half (lower sixth on a third)")
+                IconRow([.doubleTap], .restore, "Double tap", "Unsnap or center", enabled: doubleTap)
             }
-            Section("Window & app") {
-                Toggle("Pinch in to close (⌥: quit app), pinch out for full screen", isOn: $pinch)
-                Toggle("Double tap to unsnap or center", isOn: $doubleTap)
+            Section("Windows") {
+                IconRow([.swipe(.down)], .minimize, "Swipe down", "Minimize")
+                IconRow([.hold, .swipe(.up)], .fullScreen, "Hold, then swipe up", "Enter or exit full screen")
+                IconRow([.pinchIn], .close, "Pinch in", "Close window (⌥: quit app)", enabled: pinch)
+                IconRow([.pinchOut], .fullScreen, "Pinch out", "Enter or exit full screen", enabled: pinch)
+                IconRow([.swipe(.right)], .moveScreen(.right), "⌃ + swipe", "Move to the screen in that direction")
+                Toggle("Pinch gestures", isOn: $pinch)
+                Toggle("Double tap gesture", isOn: $doubleTap)
+            }
+            Section("Dock") {
+                Toggle("Gestures on Dock icons", isOn: $dock)
+                Group {
+                    IconRow([.swipe(.up)], .unminimize, "Swipe up", "Restore the last minimized window (⇧: all)", origin: .dock)
+                    IconRow([.swipe(.down)], .minimize, "Swipe down", "Minimize the front window (⇧: all)", origin: .dock)
+                    IconRow([.swipe(.left), .swipe(.right)], .cycle, "Swipe left or right", "Switch between the app's windows", origin: .dock)
+                    IconRow([.pinchIn], .quit, "Pinch in", "Quit the app", origin: .dock)
+                    IconRow([.pinchOut], .newWindow, "Pinch out", "Open a new window", origin: .dock)
+                    IconRow([.doubleTap], .hide, "Double tap", "Hide the app (⇧: hide others)", origin: .dock)
+                }
+                .disabled(!dock)
+                Text("After restoring or switching to a window, swipe again without moving the pointer to snap it.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Section("Menu bar") {
-                Toggle("Swipe ↓ on the menu bar to minimize all windows on that screen, ↑ to restore them", isOn: $menubar)
+                Toggle("Gestures on the menu bar", isOn: $menubar)
+                Group {
+                    IconRow([.swipe(.down)], .minimizeAll, "Swipe down", "Minimize all windows on that screen", origin: .menubar)
+                    IconRow([.swipe(.up)], .unminimizeAll, "Swipe up", "Restore them", origin: .menubar)
+                }
+                .disabled(!menubar)
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+/// One gesture: origin + finger icons, name, result icon and description.
+private struct IconRow: View {
+    let gestures: [GestureGlyph]
+    let action: ActionGlyph
+    let name: String
+    let result: String
+    var origin: OriginGlyph = .titlebar
+    var enabled = true
+    @Environment(\.isEnabled) private var envEnabled
+
+    init(_ gestures: [GestureGlyph], _ action: ActionGlyph, _ name: String, _ result: String,
+         origin: OriginGlyph = .titlebar, enabled: Bool = true) {
+        self.gestures = gestures; self.action = action; self.name = name; self.result = result
+        self.origin = origin; self.enabled = enabled
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            HStack(spacing: 3) {
+                Image(nsImage: GestureIcons.origin(origin, size: 16)).foregroundStyle(.tertiary)
+                ForEach(Array(gestures.enumerated()), id: \.offset) { _, g in
+                    Image(nsImage: GestureIcons.gesture(g, size: 18))
+                }
+            }
+            .frame(width: 92, alignment: .leading)
+            Text(name)
+            Spacer(minLength: 8)
+            Text(result).foregroundStyle(.secondary).multilineTextAlignment(.trailing)
+            Image(nsImage: GestureIcons.action(action, size: 20)).foregroundStyle(Color.accentColor)
+        }
+        .opacity(enabled && envEnabled ? 1 : 0.45)
     }
 }
 
@@ -346,6 +421,7 @@ enum SettingsRenderer {
             ("keyboard", AnyView(KeyboardSettings())),
             ("setup", AnyView(SetupSettings())),
             ("excluded", AnyView(ExclusionSettings())),
+            ("icon-sheet", AnyView(IconSheet())),
             ("menubar-icons", AnyView(HStack(spacing: 16) {
                 Image(nsImage: StatusIcon.image(active: true))
                 Image(nsImage: StatusIcon.image(active: false))
@@ -368,5 +444,25 @@ enum SettingsRenderer {
                     .write(to: URL(fileURLWithPath: dir).appendingPathComponent("\(name)\(suffix).png"))
             }
         }
+    }
+}
+
+/// Every icon at large size, for reviewing the set.
+private struct IconSheet: View {
+    var body: some View {
+        let gestures: [GestureGlyph] = [.swipe(.left), .swipe(.right), .swipe(.up), .swipe(.down), .pinchIn, .pinchOut, .doubleTap, .hold]
+        let actions: [ActionGlyph] = [.layout(.leftHalf), .layout(.topRight), .layout(.centerThird), .layout(.bottomLeftSixth),
+                                      .layout(.ninth(col: 1, row: 1)), .layout(.maximize), .minimize, .unminimize,
+                                      .minimizeAll, .unminimizeAll, .close, .quit, .fullScreen, .restore,
+                                      .moveScreen(.right), .hide, .cycle, .newWindow]
+        let origins: [OriginGlyph] = [.titlebar, .dock, .menubar, .keyboard]
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 14) { ForEach(Array(origins.enumerated()), id: \.offset) { Image(nsImage: GestureIcons.origin($0.element, size: 40)) } }
+            HStack(spacing: 14) { ForEach(Array(gestures.enumerated()), id: \.offset) { Image(nsImage: GestureIcons.gesture($0.element, size: 40)) } }
+            LazyVGrid(columns: Array(repeating: GridItem(.fixed(48)), count: 9), spacing: 12) {
+                ForEach(Array(actions.enumerated()), id: \.offset) { Image(nsImage: GestureIcons.action($0.element, size: 40)).foregroundStyle(Color.accentColor) }
+            }
+        }
+        .padding(20)
     }
 }

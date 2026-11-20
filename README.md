@@ -22,32 +22,57 @@ On first launch, Swoosh opens its **Setup** tab, which checks:
 - *Zoom in or out*, needed for pinch
 - *Smart zoom*, needed for double tap
 
-The app is ad-hoc signed, so macOS treats each rebuild as a new app. Turn the
-Accessibility permission off and on again after rebuilding, or set
-`SWOOSH_SIGN_IDENTITY` to a real signing identity.
+`build.sh` signs with your Apple Development certificate when one is
+installed, so the Accessibility permission survives rebuilds. Without one it
+falls back to ad-hoc signing, and you'll need to re-allow access after each
+build.
 
 **Quit Swish before using Swoosh.** Both apps capture the same gestures.
 
-## Gestures (pointer over a title bar)
+## Gestures
+
+Every gesture shows a tooltip next to the pointer, with icons for where it
+started, what your fingers did and what will happen. Window gestures also show
+a preview of where the window will land.
+
+### Title bar
+
+Each gesture starts fresh, like Swish. For example, a swipe up maximizes even
+if the window is currently a half. Several swipes in quick succession count as
+one gesture.
+
+| Gesture | 2×2 grid (default) | 3×2 / 3×3 grid |
+|---|---|---|
+| Swipe ← / → | Left / right half (again: next screen) | Third, again for two thirds |
+| Sideways + up/down (either order) | Quarter | Sixth / corner ninth |
+| Hold, then sideways (or ← →) | n/a | Middle third |
+| Swipe ↑ | Fill the desktop (or "almost") | Same |
+| Swipe ↑ twice / ↓ twice | Top / bottom half | Upper / lower sixth on a third |
+| Swipe ↓ | Minimize | Same |
+| Hold, then swipe ↑ | Enter or exit full screen | Same |
+| Pinch in / ⌥ pinch in | Close window / quit app | Same |
+| Pinch out | Enter or exit full screen | Same |
+| Double tap | Unsnap or center | Same |
+| ⌃ + swipe | Move to the screen in that direction | Same |
+
+"Hold" means resting two fingers on the trackpad for a moment before swiping.
+
+### Dock icons (pointer over an app in the Dock)
 
 | Gesture | Result |
 |---|---|
-| Swipe ← / → | Left / right half |
-| Swipe again the same way | Third → two thirds → half |
-| From a third, swipe the other way | Move through the thirds |
-| Half, then ↑ / ↓ (or ↑ / ↓, then sideways) | Quarter |
-| Third, then ↑ / ↓ | Sixth (3×2) or ninth (3×3, set in Settings) |
-| Swipe ↑ | Maximize (again: almost maximize) |
-| Swipe ↓ | Minimize (one swipe, from any unsnapped or maximized window) |
-| Pinch in / ⌥ pinch in | Close window / quit app |
-| Pinch out | Enter or exit full screen |
-| Double tap | Unsnap or center |
-| ⌃ + swipe | Move to the screen in that direction |
-| Swipe ↓ / ↑ on the menu bar | Minimize / restore all windows on that screen |
+| Swipe ↑ | Restore the last minimized window (⇧: all), ready to snap |
+| Swipe ↓ | Minimize the front window (⇧: all) |
+| Swipe ← / → | Switch between the app's windows |
+| Pinch in / out | Quit the app / open a new window |
+| Double tap | Hide the app (⇧: hide other apps) |
 
-Swipes chain: change direction mid-swipe, or swipe again straight away without
-moving the pointer. Sliders and scroll areas in toolbars, such as Music's
-volume slider, keep their normal scrolling.
+After restoring or switching to a window, swipe again without moving the
+pointer to snap it, for example swipe ↑ then ← for the left half.
+
+### Menu bar
+
+Swipe ↓ to minimize every window on that screen, and ↑ to restore them.
 
 ## Keyboard shortcuts
 
@@ -72,11 +97,13 @@ Set the keys under Settings › Keyboard: Arrow keys (the default), WASD, IJKL o
   - `Layout.swift`: snap rectangles and the swipe grammar
   - `SwipeSession.swift`: turns scroll deltas into steps and outcomes
   - `Geometry.swift`: screen maths (detection, mapping, restore, Stage Manager)
+  - `Resolver.swift`: Swish's gesture rules (grids, double swipes, hold, Dock actions)
   - `Policy.swift`: title-bar hit policy, chaining, hotkey layouts, trackpad checks
 - `Sources/Swoosh`: the AppKit app
   - `GestureEngine.swift`: CGEventTap for scroll, pinch and smart zoom
   - `WindowManager.swift`: Accessibility window actions
   - `Hotkeys.swift`: global shortcuts (Carbon)
+  - `GestureIcons.swift`, `GestureHUD.swift`: icon set and live tooltip
   - `Overlay.swift`, `StatusIcon.swift`, `SettingsView.swift`, `main.swift`: UI
 - `Tests/SwooshCoreTests`: Swift Testing suite
 - `Scripts/make-icon.swift`: renders `Resources/AppIcon.icns`

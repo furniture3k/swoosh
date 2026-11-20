@@ -32,6 +32,26 @@ SHA-256 of the main executable: `47ce2998…dcf8`.
 | Settings | `gridOffset`, `EnableTiledWindowMargins`, `sensitivitySlider`, `marginSelect`, `blacklist` (bundle IDs) | Gap, sensitivity and an excluded-app list. |
 | Third-party | Paddle.framework (licensing), Sparkle (updates), `Defaults` and `KeyboardShortcuts` Swift packages, PromiseKit | Not reproduced. |
 
+## Gesture rules (second pass)
+
+Two sources gave the actual rules:
+
+- **The binary's gesture descriptions.** These are the strings shown in Swish's settings for each action key: `snapHalves`, `snapQuarters`, `snapVertical`, `snapThirds`, `snapSixths`, `snapNinths`, `appUnminimize` and so on.
+- **The asset catalog** (`assetutil --info Assets.car`). It holds the tooltip icon families: `Origin*` (Windows, Apps, Menubar, Hotkeys), `Gesture*` (Left, Right, Up, Down, Tap, Hold, Inwards, Outwards, Mod*) and `Action*` / `ActionSnap*`.
+
+The settings nibs confirm a grid choice of "2×2, 3×2 or 3×3", with unsnapping done by dragging or the Center gesture.
+
+What the descriptions say, and what Swoosh's `Resolver` does with them:
+
+- "Swipe up once to fill the entire desktop" applies to any window. A half no longer goes to a corner.
+- "Swipe horizontally and vertically to snap to a quarter. Both orders work." This happens within one gesture.
+- "Double-swipe vertically to snap to the top or bottom half." "Swipe down once to minimize." Swoosh waits briefly after a single swipe down in case it becomes a double swipe.
+- 3×2: "switch between thirds and two-thirds. Tap and hold to access the middle third." "Swipe vertically to access the upper and lower halves of those thirds." "Upper sixth by swiping up twice."
+- Dock: "Swipe up to unminimize and chain the last window." "Swipe down to minimize the frontmost window." "Swipe left or right to activate and chain windows." "Pinch in to quit." "Pinch out to open a new tab or window." "Double tap to hide." The secondary modifier (⇧ in Swoosh) applies to all windows or other apps.
+- "Tap, hold and swipe up to enter or exit fullscreen."
+
+The REA native session could not be reopened (stale Hopper state from the first pass), so this pass used static resources only. Behaviour beyond these descriptions, such as exact timing and thresholds, is Swoosh's own design.
+
 ## Newer Swish releases (1.11 → 1.13.3)
 
 From the official appcast (`highlyopinionated.co/swish/appcast`, newest build 80,

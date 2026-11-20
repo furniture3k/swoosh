@@ -6,12 +6,31 @@ public enum Direction: String, CaseIterable, Sendable {
     public var isHorizontal: Bool { self == .left || self == .right }
 }
 
-/// Which finer grid vertical swipes on a third lead to.
+/// The snapping grid, as in Swish's Snapping settings.
 public enum Grid: String, CaseIterable, Sendable {
-    /// 3×2: thirds split into top / bottom sixths.
-    case sixths
-    /// 3×3: thirds split into top / middle / bottom ninths.
+    /// 2×2: halves and quarters.
+    case halves
+    /// 3×2: thirds, two-thirds and sixths.
+    case thirds
+    /// 3×3: thirds, two-thirds and ninths.
     case ninths
+
+    /// Accepts values written by older versions ("sixths").
+    public init(stored: String?) {
+        switch stored {
+        case "sixths": self = .thirds
+        case let s?: self = Grid(rawValue: s) ?? .halves
+        case nil: self = .halves
+        }
+    }
+
+    public var title: String {
+        switch self {
+        case .halves: return "2 × 2"
+        case .thirds: return "3 × 2"
+        case .ninths: return "3 × 3"
+        }
+    }
 }
 
 /// Snap positions, expressed as fractions of a screen's work area
@@ -134,6 +153,9 @@ public enum Outcome: Equatable, Sendable {
     case moveScreen(Direction)
     case minimizeAll
     case unminimizeAll
+    case toggleFullScreen
+    /// Snap to `layout` on the neighbouring screen in `direction`.
+    case layoutOnScreen(Layout, Direction)
 
     public var title: String {
         switch self {
@@ -144,15 +166,18 @@ public enum Outcome: Equatable, Sendable {
         case .moveScreen(let d): return "Move to \(d.rawValue.capitalized) Screen"
         case .minimizeAll: return "Minimize All Windows"
         case .unminimizeAll: return "Restore Minimized Windows"
+        case .toggleFullScreen: return "Full Screen"
+        case .layoutOnScreen(let l, let d): return "\(l.title), \(d.rawValue.capitalized) Screen"
         }
     }
 }
 
-/// The swipe grammar: each swipe step moves a window from its current snap
-/// state to a neighbouring one, so repeated swipes walk halves → thirds →
-/// two-thirds, and a perpendicular swipe reaches quarters, sixths or ninths.
+/// Step-by-step grammar used by keyboard shortcuts: each key press moves a
+/// window from its current snap state to a neighbouring one, so repeated presses
+/// walk halves → thirds → two-thirds and a perpendicular press reaches quarters,
+/// sixths or ninths. (Trackpad gestures use `Resolver`, which matches Swish.)
 public enum Grammar {
-    public static func next(from state: Layout?, step: Direction, grid: Grid = .sixths) -> Outcome {
+    public static func next(from state: Layout?, step: Direction, grid: Grid = .thirds) -> Outcome {
         guard let state else {
             switch step {
             case .left: return .layout(.leftHalf)

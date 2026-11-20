@@ -75,6 +75,10 @@ final class WindowManager {
         let area = workArea(for: f)
         switch outcome {
         case .none, .minimizeAll, .unminimizeAll: return nil
+        case .toggleFullScreen: return Screens.fullArea(Screens.screen(for: f))
+        case .layoutOnScreen(let l, let d):
+            guard let target = Screens.neighbor(of: Screens.screen(for: f), d) else { return nil }
+            return l.rect(in: Screens.workArea(target), gap: Prefs.gap)
         case .layout(let l): return l.rect(in: area, gap: Prefs.gap)
         case .restore: return Geometry.restoreFrame(saved: savedFrames[win], area: area)
         case .minimize: return Geometry.minimizePreview(for: f, in: area)
@@ -83,6 +87,122 @@ final class WindowManager {
             guard let target = Screens.neighbor(of: scr, d) else { return nil }
             return Geometry.map(f, from: Screens.workArea(scr), to: Screens.workArea(target))
         }
+    }
+
+    /// Directions in which another screen exists, relative to the window.
+    func screenDirections(for win: AXUIElement) -> Set<Direction> {
+        guard let f = win.frame else { return [] }
+        let scr = Screens.screen(for: f)
+        return Set(Direction.allCases.filter { Screens.neighbor(of: scr, $0) != nil })
+    }
+
+    // MARK: Dock
+
+    /// The running app whose Dock icon is under `point`.
+    func dockApp(at point: CGPoint) -> NSRunningApplication? {
+        guard let el = AXUIElement.element(at: point),
+              let pid = el.pid,
+              NSRunningApplication(processIdentifier: pid)?.bundleIdentifier == "com.apple.dock",
+              el.role == "AXDockItem", el.subrole == "AXApplicationDockItem" else { return nil }
+        let running = NSWorkspace.shared.runningApplications
+        if let url = el.raw("AXURL") as? URL {
+            let path = url.standardizedFileURL.resolvingSymlinksInPath().path
+            if let app = running.first(where: { $0.bundleURL?.standardizedFileURL.resolvingSymlinksInPath().path == path }) {
+                return app
+            }
+        }
+        let title = el.string("AXTitle")
+        return running.first { $0.activationPolicy == .regular && $0.localizedName == title }
+    }
+
+    /// Windows that could be minimized or cycled (standard, not minimized).
+    private func visibleWindows(of app: NSRunningApplication) -> [AXUIElement] {
+        AXUIElementCreateApplication(app.processIdentifier).windows.filter {
+            $0.subrole == "AXStandardWindow" && $0.bool("AXMinimized") != true
+        }
+    }
+
+    private func minimizedWindows(of app: NSRunningApplication) -> [AXUIElement] {
+        AXUIElementCreateApplication(app.processIdentifier).windows.filter { $0.bool("AXMinimized") == true }
+    }
+
+    /// Performs a Dock gesture. Returns the window to chain follow-up gestures to.
+    @discardableResult
+    func perform(_ action: DockAction, on app: NSRunningApplication) -> AXUIElement? {
+        guard !Prefs.excludedApps.contains(app.bundleIdentifier ?? "") else { return nil }
+        defer { Prefs.countSwoosh() }
+        switch action {
+        case .none:
+            return nil
+        case .unminimize(let all):
+            let minimized = minimizedWindows(of: app)
+            guard !minimized.isEmpty else {
+                // Nothing minimized: just bring the app forward.
+                app.unhide()
+                app.activate()
+                return visibleWindows(of: app).first
+            }
+            // Most recently minimized by Swoosh first, then whatever the app lists.
+            let recent = minimizedOrder.reversed().first { item in minimized.contains { CFEqual($0, item) } }
+            let targets = all ? minimized : [recent ?? minimized[0]]
+            for w in targets { w.set("AXMinimized", kCFBooleanFalse) }
+            minimizedOrder.removeAll { item in targets.contains { CFEqual($0, item) } }
+            app.unhide()
+            app.activate()
+            targets.last?.perform("AXRaise")
+            return targets.last
+        case .minimize(let all):
+            let windows = visibleWindows(of: app)
+            for w in all ? windows : Array(windows.prefix(1)) { minimize(w) }
+            return nil
+        case .cycle(let forward):
+            let windows = visibleWindows(of: app)
+            guard !windows.isEmpty else { app.activate(); return nil }
+            // AXWindows is front-to-back: forward brings the second window up,
+            // backward brings the last one up.
+            let next = windows.count > 1 ? (forward ? windows[1] : windows[windows.count - 1]) : windows[0]
+            next.perform("AXRaise")
+            next.set("AXMain", kCFBooleanTrue)
+            app.activate()
+            return next
+        case .quit:
+            guard app.bundleIdentifier != "com.apple.finder" else { NSSound.beep(); return nil }
+            app.terminate()
+            return nil
+        case .newWindow:
+            app.activate()
+            // ⌘N to the app, after it has come to the front.
+            let pid = app.processIdentifier
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                let src = CGEventSource(stateID: .hidSystemState)
+                for down in [true, false] {
+                    let e = CGEvent(keyboardEventSource: src, virtualKey: 45, keyDown: down)
+                    e?.flags = .maskCommand
+                    e?.postToPid(pid)
+                }
+            }
+            return nil
+        case .hide(let others):
+            if others {
+                for other in NSWorkspace.shared.runningApplications
+                where other.activationPolicy == .regular && other != app && other.processIdentifier != ownPID {
+                    other.hide()
+                }
+                app.activate()
+            } else {
+                app.hide()
+            }
+            return nil
+        }
+    }
+
+    /// Windows minimized by Swoosh, oldest first (Dock swipe up restores the latest).
+    private var minimizedOrder: [AXUIElement] = []
+
+    private func minimize(_ win: AXUIElement) {
+        win.set("AXMinimized", kCFBooleanTrue)
+        minimizedOrder.append(win)
+        if minimizedOrder.count > 50 { minimizedOrder.removeFirst(minimizedOrder.count - 50) }
     }
 
     // MARK: Actions
@@ -102,7 +222,17 @@ final class WindowManager {
             savedFrames[win] = nil
             lastSnap[win] = nil
         case .minimize:
-            win.set("AXMinimized", kCFBooleanTrue)
+            minimize(win)
+        case .toggleFullScreen:
+            toggleFullScreen(win)
+            return
+        case .layoutOnScreen(let l, let d):
+            guard let target = Screens.neighbor(of: Screens.screen(for: f), d) else { return }
+            if state(of: win) == nil { savedFrames[win] = f }
+            let rect = l.rect(in: Screens.workArea(target), gap: Prefs.gap)
+            // Move first so the window is resized against the right screen.
+            setFrame(win, CGRect(origin: rect.origin, size: f.size))
+            lastSnap[win] = (l, setFrame(win, rect))
         case .moveScreen:
             guard let target = previewFrame(outcome, for: win) else { return }
             let previous = state(of: win)
