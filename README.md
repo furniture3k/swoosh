@@ -3,6 +3,7 @@
 <img src="docs/icon.png" width="96" align="right" alt="Swoosh icon">
 
 Trackpad gestures and keyboard shortcuts for window management on macOS.
+Yes, the icon is a parody. Yes, it has googly eyes.
 Swipe, pinch or double tap on a window's title bar to snap, maximize, minimize,
 close or move it. Written from scratch based on how Swish works (see
 [docs/REVERSE_ENGINEERING.md](docs/REVERSE_ENGINEERING.md)).
@@ -64,9 +65,8 @@ build.
 
 ## Gestures
 
-Every gesture shows a tooltip next to the pointer, with icons for where it
-started, what your fingers did and what will happen. Window gestures also show
-a preview of where the window will land.
+Window gestures show a preview of where the window will land. You can also
+turn on a tooltip with gesture icons under Settings › Gestures.
 
 ### Title bar
 
@@ -80,8 +80,9 @@ one gesture.
 | Sideways + up/down (either order) | Quarter | Sixth / corner ninth |
 | Hold, then sideways (or ← →) | n/a | Middle third |
 | Swipe ↑ | Fill the desktop (or "almost") | Same |
-| Swipe ↑ twice / ↓ twice | Top / bottom half | Upper / lower sixth on a third |
-| Swipe ↓ | Minimize | Same |
+| Swipe ↑ twice | Top half | Upper sixth on a third |
+| Hold, then swipe ↓ | Bottom half | Lower sixth on a third |
+| Swipe ↓ | Minimize, instantly | Same |
 | Hold, then swipe ↑ | Enter or exit full screen | Same |
 | Pinch in / ⌥ pinch in | Close window / quit app | Same |
 | Pinch out | Enter or exit full screen | Same |
@@ -123,6 +124,9 @@ Set the keys under Settings › Keyboard: Arrow keys (the default), WASD, IJKL o
 - Space reserved for the Stage Manager strip, used automatically when Stage Manager is on
 - Swipe distance, haptics, preview, title-bar hot zone, chaining time
 - Launch at login and excluded apps
+- Hide the menu bar icon (Settings › General, or the menu's "Hide Menu Bar
+  Icon"). To get back to Settings while it's hidden, open Swoosh again from
+  Applications or Spotlight.
 
 ## Code map
 

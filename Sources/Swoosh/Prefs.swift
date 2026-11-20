@@ -25,6 +25,7 @@ enum Prefs {
         static let upFillsAlmost = "upFillsAlmost"
         static let dockGestures = "dockGestures"
         static let showTooltip = "showTooltip"
+        static let showMenuBarIcon = "showMenuBarIcon"
     }
 
     static let defaultExcluded = [
@@ -51,7 +52,8 @@ enum Prefs {
             Key.grid: Grid.halves.rawValue,
             Key.upFillsAlmost: false,
             Key.dockGestures: true,
-            Key.showTooltip: true,
+            Key.showTooltip: false,
+            Key.showMenuBarIcon: true,
             Key.hotkeys: HotkeyScheme.arrows.rawValue,
             Key.menubarGestures: true,
             Key.pinchGestures: true,
@@ -77,6 +79,10 @@ enum Prefs {
     static var upFillsAlmost: Bool { d.bool(forKey: Key.upFillsAlmost) }
     static var dockGestures: Bool { d.bool(forKey: Key.dockGestures) }
     static var showTooltip: Bool { d.bool(forKey: Key.showTooltip) }
+    static var showMenuBarIcon: Bool {
+        get { d.bool(forKey: Key.showMenuBarIcon) }
+        set { d.set(newValue, forKey: Key.showMenuBarIcon) }
+    }
     static var hotkeys: HotkeyScheme { HotkeyScheme(rawValue: d.string(forKey: Key.hotkeys) ?? "") ?? .off }
     static var onboarded: Bool {
         get { d.bool(forKey: Key.onboarded) }

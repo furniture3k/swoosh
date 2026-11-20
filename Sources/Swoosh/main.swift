@@ -11,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     private var settingsWindow: NSWindow?
     private var permissionTimer: Timer?
     private var lastHotkeyScheme: HotkeyScheme?
+    private var visibilityObservation: NSKeyValueObservation?
 
     func applicationDidFinishLaunching(_ note: Notification) {
         Prefs.registerDefaults()
@@ -57,8 +58,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     @objc private func defaultsChanged() {
         DispatchQueue.main.async { [weak self] in
-            self?.updateIcon()
-            self?.applyHotkeys()
+            guard let self else { return }
+            self.updateIcon()
+            self.applyHotkeys()
+            if self.statusItem.isVisible != Prefs.showMenuBarIcon { self.statusItem.isVisible = Prefs.showMenuBarIcon }
         }
     }
 
@@ -77,6 +80,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let menu = NSMenu()
         menu.delegate = self
         statusItem.menu = menu
+        statusItem.isVisible = Prefs.showMenuBarIcon
+        // ⌘-dragging the icon out of the menu bar also hides it; remember that.
+        visibilityObservation = statusItem.observe(\.isVisible, options: [.new]) { item, _ in
+            if Prefs.showMenuBarIcon != item.isVisible { Prefs.showMenuBarIcon = item.isVisible }
+        }
         updateIcon()
     }
 
@@ -119,9 +127,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         let guide = NSMenuItem(title: "Gesture Guide", action: #selector(openGuide), keyEquivalent: "")
         guide.target = self
         menu.addItem(guide)
+        let hide = NSMenuItem(title: "Hide Menu Bar Icon", action: #selector(hideIcon), keyEquivalent: "")
+        hide.target = self
+        hide.toolTip = "Open Swoosh again from Applications or Spotlight to get to Settings."
+        menu.addItem(hide)
         menu.addItem(.separator())
         let quit = NSMenuItem(title: "Quit Swoosh", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         menu.addItem(quit)
+    }
+
+    @objc private func hideIcon() {
+        let alert = NSAlert()
+        alert.messageText = "Hide the Swoosh menu bar icon?"
+        alert.informativeText = "Swoosh keeps running. To get back to Settings, open Swoosh again from Applications or Spotlight, where you can turn the icon back on."
+        alert.addButton(withTitle: "Hide Icon")
+        alert.addButton(withTitle: "Cancel")
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        Prefs.showMenuBarIcon = false
     }
 
     @objc private func toggleEnabled() {

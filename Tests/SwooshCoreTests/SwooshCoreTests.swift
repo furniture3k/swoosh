@@ -131,10 +131,11 @@ struct ResolverTests {
         #expect(resolve([.down, .right]) == .layout(.bottomRight))
     }
 
-    @Test("Double swipe vertically: top / bottom half")
-    func doubleVertical() {
+    @Test("Swipe up twice: top half. Hold, then swipe down: bottom half")
+    func verticalHalves() {
         #expect(resolve([.up, .up]) == .layout(.topHalf))
-        #expect(resolve([.down, .down]) == .layout(.bottomHalf))
+        #expect(resolve([.down], hold: true) == .layout(.bottomHalf))
+        #expect(resolve([.down], origin: .leftThird, grid: .thirds, hold: true) == .layout(.bottomLeftSixth))
     }
 
     @Test func almostMaximizeSetting() {
@@ -170,6 +171,7 @@ struct ResolverTests {
         #expect(resolve([.down, .right], grid: .thirds) == .layout(.bottomRightSixth))
         #expect(resolve([.up, .up], origin: .centerThird, grid: .thirds) == .layout(.topCenterSixth))
         #expect(resolve([.up], origin: .centerThird, grid: .thirds) == .layout(.maximize))
+        #expect(resolve([.down], origin: .centerThird, grid: .thirds) == .minimize)
     }
 
     @Test("3×3: every ninth is reachable")
@@ -181,13 +183,14 @@ struct ResolverTests {
         for c in 0..<3 { for r in 0..<3 { #expect(reached.contains(.ninth(col: c, row: r)), "missing \(c),\(r)") } }
     }
 
-    @Test("Only a pending minimize waits for a follow-up stroke")
-    func followUpWait() {
-        let ctx = GestureContext()
-        #expect(Resolver.waitsForFollowUp([.down], ctx))
-        #expect(!Resolver.waitsForFollowUp([.up], ctx))
-        #expect(!Resolver.waitsForFollowUp([.left], ctx))
-        #expect(!Resolver.waitsForFollowUp([.down, .down], ctx))
+    @Test("Minimize ends the gesture immediately (regression: minimize was delayed)")
+    func minimizeIsImmediate() {
+        #expect(Resolver.endsGesture(.minimize))
+        #expect(Resolver.endsGesture(.toggleFullScreen))
+        #expect(!Resolver.endsGesture(.layout(.maximize)))
+        var s = SwipeSession(origin: nil, threshold: 40)
+        s.feed(dx: 0, dy: 60)
+        #expect(s.endsOnLift)
     }
 
     @Test func dockActions() {

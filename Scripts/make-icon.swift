@@ -4,16 +4,17 @@ import AppKit
 
 let output = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "Resources/AppIcon.icns"
 
+// A loving parody of a certain two-fingertip window app icon: same idea, but
+// the fingertips are googly eyes and the window has opinions.
 func drawIcon(_ s: CGFloat) {
-    // macOS icon grid: 1024 canvas, 824 body, 185 corner radius.
+    // macOS icon grid: 1024 canvas, 824 body.
     let inset = s * 100 / 1024
     let body = NSRect(x: inset, y: inset, width: s - 2 * inset, height: s - 2 * inset)
     let radius = body.width * 0.2245
 
-    // Drop shadow under the body.
     NSGraphicsContext.saveGraphicsState()
     let shadow = NSShadow()
-    shadow.shadowColor = NSColor.black.withAlphaComponent(0.35)
+    shadow.shadowColor = NSColor.black.withAlphaComponent(0.3)
     shadow.shadowBlurRadius = s * 0.025
     shadow.shadowOffset = NSSize(width: 0, height: -s * 0.012)
     shadow.set()
@@ -22,77 +23,92 @@ func drawIcon(_ s: CGFloat) {
     squircle.fill()
     NSGraphicsContext.restoreGraphicsState()
 
-    // Background gradient: violet top-left → cyan bottom-right.
     NSGraphicsContext.saveGraphicsState()
     squircle.addClip()
+    // Sunset background: nothing like a sensible grey.
     NSGradient(colors: [
-        NSColor(srgbRed: 0.44, green: 0.33, blue: 0.98, alpha: 1),
-        NSColor(srgbRed: 0.27, green: 0.45, blue: 0.98, alpha: 1),
-        NSColor(srgbRed: 0.13, green: 0.78, blue: 0.86, alpha: 1),
-    ])!.draw(in: body, angle: -50)
-    // Soft top highlight.
-    NSGradient(colors: [NSColor.white.withAlphaComponent(0.22), NSColor.white.withAlphaComponent(0)])!
+        NSColor(srgbRed: 1.00, green: 0.78, blue: 0.30, alpha: 1),
+        NSColor(srgbRed: 1.00, green: 0.47, blue: 0.36, alpha: 1),
+        NSColor(srgbRed: 0.96, green: 0.30, blue: 0.55, alpha: 1),
+    ])!.draw(in: body, angle: -70)
+    NSGradient(colors: [NSColor.white.withAlphaComponent(0.25), NSColor.white.withAlphaComponent(0)])!
         .draw(in: NSRect(x: body.minX, y: body.midY, width: body.width, height: body.height / 2), angle: -90)
 
-    // Window card.
-    let card = NSRect(x: body.minX + body.width * 0.16, y: body.minY + body.height * 0.22,
-                      width: body.width * 0.68, height: body.height * 0.52)
-    let cardRadius = card.width * 0.08
+    // The window, tilted as if it just got swooshed.
+    let p = { (x: CGFloat, y: CGFloat) in NSPoint(x: body.minX + body.width * x, y: body.minY + body.height * y) }
+    NSGraphicsContext.saveGraphicsState()
+    let tilt = NSAffineTransform()
+    tilt.translateX(by: body.midX, yBy: body.midY)
+    tilt.rotate(byDegrees: 6)
+    tilt.translateX(by: -body.midX, yBy: -body.midY)
+    tilt.concat()
+
+    let card = NSRect(x: body.minX + body.width * 0.13, y: body.minY + body.height * 0.17,
+                      width: body.width * 0.74, height: body.height * 0.64)
+    let cardRadius = card.width * 0.1
     NSGraphicsContext.saveGraphicsState()
     let cardShadow = NSShadow()
-    cardShadow.shadowColor = NSColor(srgbRed: 0.08, green: 0.05, blue: 0.35, alpha: 0.45)
-    cardShadow.shadowBlurRadius = s * 0.04
-    cardShadow.shadowOffset = NSSize(width: 0, height: -s * 0.015)
+    cardShadow.shadowColor = NSColor(srgbRed: 0.45, green: 0.08, blue: 0.2, alpha: 0.45)
+    cardShadow.shadowBlurRadius = s * 0.045
+    cardShadow.shadowOffset = NSSize(width: 0, height: -s * 0.02)
     cardShadow.set()
-    NSColor.white.withAlphaComponent(0.96).setFill()
+    NSColor(srgbRed: 0.99, green: 0.98, blue: 0.96, alpha: 1).setFill()
     NSBezierPath(roundedRect: card, xRadius: cardRadius, yRadius: cardRadius).fill()
     NSGraphicsContext.restoreGraphicsState()
 
-    // Title bar dots.
-    let dotR = card.width * 0.028
-    let dotY = card.maxY - card.height * 0.12
+    // Traffic lights (one of them is clearly panicking).
+    let dotR = card.width * 0.035
+    let dotY = card.maxY - card.height * 0.13
     for (i, color) in [NSColor(srgbRed: 1, green: 0.37, blue: 0.34, alpha: 1),
                        NSColor(srgbRed: 1, green: 0.74, blue: 0.18, alpha: 1),
                        NSColor(srgbRed: 0.16, green: 0.79, blue: 0.27, alpha: 1)].enumerated() {
         color.setFill()
-        let x = card.minX + card.width * 0.07 + CGFloat(i) * dotR * 3
-        NSBezierPath(ovalIn: NSRect(x: x - dotR, y: dotY - dotR, width: dotR * 2, height: dotR * 2)).fill()
+        let x = card.minX + card.width * 0.1 + CGFloat(i) * dotR * 3.1
+        let wobble: CGFloat = i == 1 ? dotR * 0.45 : 0
+        NSBezierPath(ovalIn: NSRect(x: x - dotR, y: dotY - dotR + wobble, width: dotR * 2, height: dotR * 2)).fill()
     }
 
-    // Snapped left pane.
-    let content = NSRect(x: card.minX + card.width * 0.06, y: card.minY + card.height * 0.09,
-                         width: card.width * 0.88, height: card.height * 0.66)
-    let pane = NSRect(x: content.minX, y: content.minY, width: content.width * 0.46, height: content.height)
-    NSGradient(colors: [NSColor(srgbRed: 0.42, green: 0.36, blue: 0.98, alpha: 1),
-                        NSColor(srgbRed: 0.20, green: 0.62, blue: 0.95, alpha: 1)])!
-        .draw(in: NSBezierPath(roundedRect: pane, xRadius: cardRadius * 0.6, yRadius: cardRadius * 0.6), angle: -60)
-    // Ghost right pane.
-    let ghost = NSRect(x: pane.maxX + content.width * 0.08, y: content.minY, width: content.width * 0.46, height: content.height)
-    let ghostPath = NSBezierPath(roundedRect: ghost, xRadius: cardRadius * 0.6, yRadius: cardRadius * 0.6)
-    NSColor(srgbRed: 0.35, green: 0.45, blue: 0.95, alpha: 0.12).setFill()
-    ghostPath.fill()
-    ghostPath.lineWidth = s * 0.006
-    ghostPath.setLineDash([s * 0.018, s * 0.012], count: 2, phase: 0)
-    NSColor(srgbRed: 0.35, green: 0.45, blue: 0.95, alpha: 0.45).setStroke()
-    ghostPath.stroke()
-    NSGraphicsContext.restoreGraphicsState()
+    // Googly eyes, looking in two different directions.
+    func googly(center c: NSPoint, r: CGFloat, look: CGVector) {
+        NSGraphicsContext.saveGraphicsState()
+        let eyeShadow = NSShadow()
+        eyeShadow.shadowColor = NSColor.black.withAlphaComponent(0.22)
+        eyeShadow.shadowBlurRadius = r * 0.12
+        eyeShadow.shadowOffset = NSSize(width: 0, height: -r * 0.06)
+        eyeShadow.set()
+        let eye = NSBezierPath(ovalIn: NSRect(x: c.x - r, y: c.y - r, width: r * 2, height: r * 2))
+        NSColor.white.setFill()
+        eye.fill()
+        NSGraphicsContext.restoreGraphicsState()
+        // Plastic dome rim and inner shading.
+        NSGradient(colors: [NSColor(white: 1, alpha: 0), NSColor(white: 0.82, alpha: 1)])!
+            .draw(in: NSBezierPath(ovalIn: NSRect(x: c.x - r, y: c.y - r, width: r * 2, height: r * 2)), relativeCenterPosition: NSPoint(x: -0.2, y: 0.25))
+        let rim = NSBezierPath(ovalIn: NSRect(x: c.x - r, y: c.y - r, width: r * 2, height: r * 2))
+        rim.lineWidth = r * 0.07
+        NSColor(white: 0.25, alpha: 1).setStroke()
+        rim.stroke()
+        let pr = r * 0.5
+        let pc = NSPoint(x: c.x + look.dx * (r - pr - r * 0.08), y: c.y + look.dy * (r - pr - r * 0.08))
+        NSColor(white: 0.08, alpha: 1).setFill()
+        NSBezierPath(ovalIn: NSRect(x: pc.x - pr, y: pc.y - pr, width: pr * 2, height: pr * 2)).fill()
+        NSColor.white.withAlphaComponent(0.9).setFill()
+        NSBezierPath(ovalIn: NSRect(x: pc.x - pr * 0.15 - pr * 0.3, y: pc.y + pr * 0.25, width: pr * 0.42, height: pr * 0.42)).fill()
+    }
+    let eyeR = card.width * 0.175
+    googly(center: p(0.34, 0.47), r: eyeR, look: CGVector(dx: 0.75, dy: -0.66))
+    googly(center: p(0.665, 0.49), r: eyeR * 1.06, look: CGVector(dx: -0.35, dy: 0.94))
 
-    // The swoosh: a tapered white arc sweeping across the card.
-    NSGraphicsContext.saveGraphicsState()
-    let arcShadow = NSShadow()
-    arcShadow.shadowColor = NSColor(srgbRed: 0.1, green: 0.05, blue: 0.4, alpha: 0.35)
-    arcShadow.shadowBlurRadius = s * 0.02
-    arcShadow.shadowOffset = NSSize(width: 0, height: -s * 0.008)
-    arcShadow.set()
-    let p = { (x: CGFloat, y: CGFloat) in NSPoint(x: body.minX + body.width * x, y: body.minY + body.height * y) }
-    let swoosh = NSBezierPath()
-    swoosh.move(to: p(0.86, 0.86))
-    swoosh.curve(to: p(0.10, 0.20), controlPoint1: p(0.80, 0.42), controlPoint2: p(0.42, 0.14))
-    swoosh.curve(to: p(0.86, 0.86), controlPoint1: p(0.50, 0.26), controlPoint2: p(0.74, 0.50))
-    swoosh.close()
-    NSColor.white.setFill()
-    swoosh.fill()
-    NSGraphicsContext.restoreGraphicsState()
+    // A smug little swoosh of a smile.
+    let smile = NSBezierPath()
+    smile.move(to: p(0.42, 0.265))
+    smile.curve(to: p(0.62, 0.255), controlPoint1: p(0.47, 0.205), controlPoint2: p(0.56, 0.2))
+    smile.lineWidth = s * 0.018
+    smile.lineCapStyle = .round
+    NSColor(srgbRed: 0.93, green: 0.33, blue: 0.45, alpha: 1).setStroke()
+    smile.stroke()
+
+    NSGraphicsContext.restoreGraphicsState() // tilt
+    NSGraphicsContext.restoreGraphicsState() // clip
 }
 
 func png(_ px: Int) -> Data {

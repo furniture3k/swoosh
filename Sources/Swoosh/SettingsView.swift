@@ -41,6 +41,7 @@ private struct GeneralSettings: View {
     @AppStorage(Prefs.Key.activateAfterSnap) private var activateAfterSnap = true
     @AppStorage(Prefs.Key.stageManagerOffset) private var stageOffset = 120.0
     @AppStorage(Prefs.Key.swooshCount) private var count = 0
+    @AppStorage(Prefs.Key.showMenuBarIcon) private var menuBarIcon = true
     @ObservedObject private var login = LoginItem.shared
 
     var body: some View {
@@ -48,6 +49,11 @@ private struct GeneralSettings: View {
             Section {
                 Toggle("Enable Swoosh", isOn: $enabled)
                 Toggle("Launch at login", isOn: Binding(get: { login.enabled }, set: { login.set($0) }))
+                Toggle("Show icon in menu bar", isOn: $menuBarIcon)
+                if !menuBarIcon {
+                    Text("To open Settings while the icon is hidden, open Swoosh again from Applications or Spotlight.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 if let error = login.error {
                     Text(error).font(.caption).foregroundStyle(.red)
                 }
@@ -96,17 +102,17 @@ private struct GestureSettings: View {
     @AppStorage(Prefs.Key.doubleTapGesture) private var doubleTap = true
     @AppStorage(Prefs.Key.menubarGestures) private var menubar = true
     @AppStorage(Prefs.Key.dockGestures) private var dock = true
-    @AppStorage(Prefs.Key.showTooltip) private var tooltip = true
+    @AppStorage(Prefs.Key.showTooltip) private var tooltip = false
 
     private var grid: SwooshCore.Grid { SwooshCore.Grid(stored: gridRaw) }
 
     var body: some View {
         Form {
             Section {
-                Text("Swipe with two fingers on a window's title bar, a Dock icon or the menu bar. A tooltip shows what the gesture will do, and a preview shows where the window will land. Swipe again straight away to combine swipes.")
+                Text("Swipe with two fingers on a window's title bar, a Dock icon or the menu bar. A preview shows where the window will land. Swipe again straight away to combine swipes.")
                     .font(.callout).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                Toggle("Show gesture tooltip", isOn: $tooltip)
+                Toggle("Show a tooltip with gesture icons next to the pointer", isOn: $tooltip)
             }
             Section("Snapping") {
                 Picker("Grid", selection: $gridRaw) {
@@ -129,11 +135,11 @@ private struct GestureSettings: View {
                 }
                 IconRow([.swipe(.up)], .layout(almost ? .almostMaximize : .maximize), "Swipe up", almost ? "Almost fill the desktop" : "Fill the desktop")
                 IconRow([.swipe(.up), .swipe(.up)], .layout(.topHalf), "Swipe up twice", grid == .halves ? "Top half" : "Top half (upper sixth on a third)")
-                IconRow([.swipe(.down), .swipe(.down)], .layout(.bottomHalf), "Swipe down twice", grid == .halves ? "Bottom half" : "Bottom half (lower sixth on a third)")
+                IconRow([.hold, .swipe(.down)], .layout(.bottomHalf), "Hold, then swipe down", grid == .halves ? "Bottom half" : "Bottom half (lower sixth on a third)")
                 IconRow([.doubleTap], .restore, "Double tap", "Unsnap or center", enabled: doubleTap)
             }
             Section("Windows") {
-                IconRow([.swipe(.down)], .minimize, "Swipe down", "Minimize")
+                IconRow([.swipe(.down)], .minimize, "Swipe down", "Minimize, instantly")
                 IconRow([.hold, .swipe(.up)], .fullScreen, "Hold, then swipe up", "Enter or exit full screen")
                 IconRow([.pinchIn], .close, "Pinch in", "Close window (⌥: quit app)", enabled: pinch)
                 IconRow([.pinchOut], .fullScreen, "Pinch out", "Enter or exit full screen", enabled: pinch)

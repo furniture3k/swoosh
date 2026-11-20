@@ -32,7 +32,8 @@ public struct GestureContext: Sendable {
 /// * Swipe left/right: halves (2×2) or thirds (3×2, 3×3).
 /// * Horizontal and vertical in one gesture, in either order: a quarter, sixth or ninth.
 /// * Swipe up once: fill the desktop. Twice: top half (or the upper sixth of a third).
-/// * Swipe down once: minimize. Twice: bottom half (or the lower sixth of a third).
+/// * Swipe down: minimize, immediately. Hold, then swipe down: bottom half (or the
+///   lower sixth of a third).
 /// * Tap and hold, then swipe up: full screen. In thirds modes, hold + sideways: middle third.
 public enum Resolver {
     public static func resolve(_ steps: [Direction], _ ctx: GestureContext) -> Outcome {
@@ -70,10 +71,13 @@ public enum Resolver {
         }
     }
 
-    /// Whether another stroke could still change the outcome, so the gesture
-    /// should wait briefly before doing something irreversible (minimizing).
-    public static func waitsForFollowUp(_ steps: [Direction], _ ctx: GestureContext) -> Bool {
-        resolve(steps, ctx) == .minimize
+    /// Minimizing ends the gesture at once (no waiting for a follow-up stroke),
+    /// so swipe down feels instant.
+    public static func endsGesture(_ outcome: Outcome) -> Bool {
+        switch outcome {
+        case .minimize, .toggleFullScreen: return true
+        default: return false
+        }
     }
 
     // MARK: Pieces
@@ -88,7 +92,8 @@ public enum Resolver {
             if ctx.grid != .halves, let c = column { return .layout(Layout.topSixth(c)) }
             return .layout(.topHalf)
         } else {
-            if count == 1 { return .minimize }
+            // Hold (or a second swipe in the same stroke sequence) for the bottom half.
+            guard ctx.hold || count >= 2 else { return .minimize }
             if ctx.grid != .halves, let c = column { return .layout(Layout.bottomSixth(c)) }
             return .layout(.bottomHalf)
         }

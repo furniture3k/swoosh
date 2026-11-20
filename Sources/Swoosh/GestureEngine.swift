@@ -271,9 +271,9 @@ final class GestureEngine {
         switch g.target {
         case .window(let win):
             let outcome = g.session.outcome
-            if g.session.waitsForFollowUp {
-                // e.g. a single swipe down: wait in case it becomes a double swipe.
-                scheduleFinalize()
+            if g.session.endsOnLift {
+                // Minimize / full screen: act now and end the gesture, no waiting.
+                finalize()
                 return
             }
             if outcome != .none, outcome != g.applied {

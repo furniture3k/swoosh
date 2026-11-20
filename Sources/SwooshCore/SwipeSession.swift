@@ -95,8 +95,8 @@ public struct SwipeSession {
         return DockAction.swipe(last, secondary: secondary)
     }
 
-    /// The gesture should wait for a possible follow-up stroke before acting.
-    public var waitsForFollowUp: Bool {
-        mode == .window && Resolver.waitsForFollowUp(steps, context)
+    /// The gesture is complete once this outcome is applied (no follow-up strokes).
+    public var endsOnLift: Bool {
+        mode == .window && Resolver.endsGesture(outcome)
     }
 }
