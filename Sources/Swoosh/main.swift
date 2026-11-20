@@ -28,6 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         DistributedNotificationCenter.default().addObserver(self, selector: #selector(settingsProcessChanged),
                                                             name: Prefs.changedNotification, object: nil)
 
+        engine.onPermissionLost = { [weak self] in self?.checkPermission() }
         if AXIsProcessTrusted() {
             engine.start()
         } else {
@@ -98,8 +99,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func checkPermission() {
         let trusted = AXIsProcessTrusted()
-        if trusted, !engine.isRunning { engine.start() }
-        if !trusted, engine.isRunning { engine.stop() }
+        if trusted, !engine.isRunning {
+            engine.stop()   // drop a tap the system disabled, then make a fresh one
+            engine.start()
+        }
+        // Remove the tap the moment access is gone, even if it is already
+        // disabled: an active tap without permission can freeze input.
+        if !trusted, engine.hasTap { engine.stop() }
         updateIcon()
         if trusted != lastTrusted { lastTrusted = trusted; schedulePermissionTimer() }
     }
@@ -108,16 +114,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func schedulePermissionTimer() {
         permissionTimer?.invalidate()
-        let interval: TimeInterval = AXIsProcessTrusted() ? 30 : 2
+        // Fallback for when the change notification is missed. Short enough that
+        // a revoked permission is noticed quickly; coalesced to save power.
+        let interval: TimeInterval = AXIsProcessTrusted() ? 3 : 2
         let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in self?.checkPermission() }
-        timer.tolerance = interval / 2
+        timer.tolerance = 1
         RunLoop.main.add(timer, forMode: .common)
         permissionTimer = timer
     }
 
     @objc private func accessibilityChanged() {
-        // The permission database updates just after the notification.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.checkPermission() }
+        // The permission database can update a moment after the notification,
+        // so check right away and then a few more times.
+        for delay in [0.0, 0.15, 0.4, 0.8, 1.5, 3.0] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in self?.checkPermission() }
+        }
     }
 
     private func promptForAccessibility() {

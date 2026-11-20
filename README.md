@@ -116,7 +116,7 @@ Swoosh is built to be invisible when idle. Measured on Apple silicon, at idle:
 |---|---|---|
 | Memory (phys_footprint) | **11 MB** | 15 MB |
 | Threads | **3** | 5 |
-| Idle CPU / wake-ups | 0 % / 0 | ~0 % |
+| Idle CPU | 0 % | ~0 % |
 
 How it stays light:
 
@@ -136,8 +136,12 @@ How it stays light:
   loads SwiftUI views, so it stays around 11 MB no matter how often you open
   Settings. Run `--memory-test <file>` to check.
 - **Event-driven, not polling.** Permission changes arrive via the system's
-  Accessibility notification. The only timer is a 30-second, coalesced
+  Accessibility notification. The only timer is a 3-second, coalesced
   fallback.
+- **Safe when access is revoked.** If you turn Swoosh off under Privacy &
+  Security › Accessibility while it's running, it removes its event tap
+  straight away rather than re-enabling it, so your mouse and trackpad keep
+  working.
 - **Lazy, cached and stripped.** The preview and tooltip windows are created
   on first use. Excluded apps, the Dock's process ID and the Stage Manager
   state are cached. The binary is stripped (about 0.5 MB).

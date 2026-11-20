@@ -71,6 +71,11 @@ final class GestureEngine {
     init(windowManager: WindowManager) { wm = windowManager }
 
     var isRunning: Bool { tap.map { CGEvent.tapIsEnabled(tap: $0) } ?? false }
+    /// An event tap exists (enabled or not). Revoking permission must remove it.
+    var hasTap: Bool { tap != nil }
+    /// Called on the main thread when the tap is torn down because
+    /// Accessibility access disappeared.
+    var onPermissionLost: (() -> Void)?
     private var now: TimeInterval { ProcessInfo.processInfo.systemUptime }
 
     @discardableResult
@@ -115,10 +120,20 @@ final class GestureEngine {
         let pass = Unmanaged.passUnretained(event)
         switch rawType {
         case EventType.tapDisabledByTimeout, EventType.tapDisabledByUserInput:
-            if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
             // Whatever was in flight is lost; don't leave stale UI behind.
             if gesture?.strokeActive == true { gesture = nil; overlay.hide(); hud.hide() }
             pinch = nil
+            if AXIsProcessTrusted() {
+                if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
+            } else {
+                // Accessibility was revoked. Re-enabling the tap now would make
+                // the system hold every click and scroll for an app that may no
+                // longer receive them, freezing input. Tear it down instead.
+                DispatchQueue.main.async { [weak self] in
+                    self?.stop()
+                    self?.onPermissionLost?()
+                }
+            }
             return pass
         default: break
         }
