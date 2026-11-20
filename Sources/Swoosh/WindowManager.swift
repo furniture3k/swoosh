@@ -261,10 +261,13 @@ final class WindowManager {
 
     // MARK: Drag to unsnap
 
+    /// Debug: would a drag starting at `point` be considered (ignoring saved frames)?
+    func debugDragWindow(at point: CGPoint) -> Bool { dragWindow(at: point) != nil }
+
     /// A window Swoosh snapped, grabbed by its title bar at `point`: returns it
     /// with the frame it had before snapping. Cheap when nothing is snapped.
     func dragUnsnapCandidate(at point: CGPoint) -> (window: AXUIElement, frame: CGRect, saved: CGRect)? {
-        guard hasSavedFrames, let win = titlebarWindow(at: point), let saved = savedFrame(for: win),
+        guard hasSavedFrames, let win = dragWindow(at: point), let saved = savedFrame(for: win),
               let frame = win.frame, state(of: win) != nil else { return nil }
         return (win, frame, saved)
     }
@@ -300,17 +303,49 @@ final class WindowManager {
 
     private func savedFrame(for win: AXUIElement) -> CGRect? {
         if let f = savedFrames[win] { return f }
-        guard let key = persistKey(for: win),
-              let v = UserDefaults.standard.dictionary(forKey: Self.persistedKey)?[key] as? [Double], v.count >= 4 else { return nil }
+        guard let key = persistKey(for: win), let all = UserDefaults.standard.dictionary(forKey: Self.persistedKey) else { return nil }
+        // Exact app + title, else the most recent entry for the same app: some
+        // apps change their window title constantly (VS Code shows the open file).
+        let bundlePrefix = String(key.prefix { $0 != "|" }) + "|"
+        let entry = (all[key] as? [Double]) ?? all
+            .filter { $0.key.hasPrefix(bundlePrefix) }
+            .compactMap { $0.value as? [Double] }
+            .max { ($0.last ?? 0) < ($1.last ?? 0) }
+        guard let v = entry, v.count >= 4 else { return nil }
         return CGRect(x: v[0], y: v[1], width: v[2], height: v[3])
     }
 
     private func forgetFrame(for win: AXUIElement) {
         savedFrames[win] = nil
         guard let key = persistKey(for: win),
-              var all = UserDefaults.standard.dictionary(forKey: Self.persistedKey), all[key] != nil else { return }
+              var all = UserDefaults.standard.dictionary(forKey: Self.persistedKey) else { return }
+        let before = all.count
         all[key] = nil
-        UserDefaults.standard.set(all, forKey: Self.persistedKey)
+        if all.count == before {
+            // Title changed since snapping: drop the app's latest entry instead.
+            let bundlePrefix = String(key.prefix { $0 != "|" }) + "|"
+            if let latest = all.filter({ $0.key.hasPrefix(bundlePrefix) })
+                .max(by: { (($0.value as? [Double])?.last ?? 0) < (($1.value as? [Double])?.last ?? 0) })?.key {
+                all[latest] = nil
+            }
+        }
+        if all.count != before { UserDefaults.standard.set(all, forKey: Self.persistedKey) }
+    }
+
+    /// The window whose top strip (title bar / toolbar height) is under `point`.
+    /// Unlike `titlebarWindow`, this ignores what kind of element was hit: some
+    /// apps (VS Code and other Electron apps) expose their title bar as a scroll
+    /// area. That's safe here because unsnapping only happens once the window
+    /// actually moves.
+    private func dragWindow(at point: CGPoint) -> AXUIElement? {
+        guard let el = AXUIElement.element(at: point), let pid = el.pid, pid != ownPID, pid != dockPID,
+              !isExcluded(pid: pid) else { return nil }
+        let own = el.attributes(["AXRole", "AXWindow"])
+        guard let win = (own[0] as? String) == "AXWindow" ? el : (AXUIElement.asElement(own[1]) ?? el.windowAncestor()),
+              let frame = win.frame, frame.contains(point) else { return nil }
+        let offsetY = point.y - frame.minY
+        guard offsetY >= 0, offsetY <= Prefs.titlebarHeight + 60, isEligible(win) else { return nil }
+        return win
     }
 
     /// Restores the pre-snap size while the user drags the window away.

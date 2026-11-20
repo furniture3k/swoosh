@@ -337,6 +337,34 @@ if let i = CommandLine.arguments.firstIndex(of: "--benchmark"), i + 1 < CommandL
     print(report, terminator: "")
     exit(0)
 }
+if let i = CommandLine.arguments.firstIndex(of: "--probe"), i + 2 < CommandLine.arguments.count {
+    // Read-only: what Swoosh sees along an app's title bar. --probe <bundle id> <out>
+    Prefs.registerDefaults()
+    let bundle = CommandLine.arguments[i + 1], out = CommandLine.arguments[i + 2]
+    let wm = WindowManager()
+    var log = "trusted=\(AXIsProcessTrusted())\n"
+    guard let target = NSRunningApplication.runningApplications(withBundleIdentifier: bundle).first else {
+        try? "not running\n".write(toFile: out, atomically: true, encoding: .utf8); exit(1)
+    }
+    let appEl = AXUIElementCreateApplication(target.processIdentifier)
+    for win in appEl.windows {
+        guard let f = win.frame else { continue }
+        log += "window \(win.string("AXTitle") ?? "?") role=\(win.role ?? "?") sub=\(win.subrole ?? "?") frame=\(f) state=\(String(describing: wm.state(of: win)))\n"
+        for dy in [4.0, 12, 20, 30, 45] {
+            for fx in [0.1, 0.3, 0.5, 0.7, 0.9] {
+                let p = CGPoint(x: f.minX + f.width * fx, y: f.minY + dy)
+                guard let el = AXUIElement.element(at: p) else { log += "  (\(Int(fx*100))%, +\(Int(dy))) no element\n"; continue }
+                var chain: [String] = []
+                var cur: AXUIElement? = el
+                for _ in 0..<8 { guard let c = cur else { break }; chain.append(c.role ?? "?"); if c.role == "AXWindow" { break }; cur = c.parent }
+                let hitWin = el.windowAncestor()
+                log += "  (\(Int(fx*100))%, +\(Int(dy))) pid=\(el.pid ?? -1) chain=\(chain.joined(separator: ">")) window=\(hitWin.map { CFEqual($0, win) } ?? false) titlebar=\(wm.titlebarWindow(at: p) != nil) drag=\(wm.debugDragWindow(at: p))\n"
+            }
+        }
+    }
+    try? log.write(toFile: out, atomically: true, encoding: .utf8)
+    exit(0)
+}
 if let i = CommandLine.arguments.firstIndex(of: "--drag-test"), i + 1 < CommandLine.arguments.count {
     // Snaps Finder's front window, then drags its title bar with synthetic events.
     Prefs.registerDefaults()
