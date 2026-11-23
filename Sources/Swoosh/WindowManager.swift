@@ -75,14 +75,18 @@ final class WindowManager {
 
     private var bundleIDs: [pid_t: String] = [:]
 
+    private func bundleID(pid: pid_t) -> String {
+        if let id = bundleIDs[pid] { return id }
+        if bundleIDs.count > 200 { bundleIDs.removeAll() }
+        let id = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier ?? ""
+        bundleIDs[pid] = id
+        return id
+    }
+
     private func isExcluded(pid: pid_t) -> Bool {
         let excluded = Prefs.excludedApps
         guard !excluded.isEmpty else { return false }
-        if bundleIDs[pid] == nil {
-            if bundleIDs.count > 200 { bundleIDs.removeAll() }
-            bundleIDs[pid] = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier ?? ""
-        }
-        return excluded.contains(bundleIDs[pid]!)
+        return excluded.contains(bundleID(pid: pid))
     }
 
     private var cachedDockPID: pid_t?
@@ -354,7 +358,23 @@ final class WindowManager {
     private static let controlRoles: Set<String> = [
         "AXButton", "AXPopUpButton", "AXMenuButton", "AXTextField", "AXSearchField", "AXSecureTextField",
         "AXCheckBox", "AXRadioButton", "AXSlider", "AXComboBox", "AXDisclosureTriangle", "AXIncrementor",
-        "AXLink", "AXTextArea", "AXSegmentedControl",
+        "AXLink", "AXTextArea", "AXSegmentedControl", "AXTab", "AXTabGroup",
+    ]
+
+    /// Browsers that put their tabs in the title bar. Chromium browsers don't
+    /// expose tabs to Accessibility unless a screen reader is on, so a tab
+    /// looks like bare title bar. Pressing there is treated like pressing a
+    /// control: Swoosh only unsnaps once the browser really moves the window
+    /// (dragging the empty tab strip, or a window's only tab), never while a
+    /// tab is reordered or torn off into a new window.
+    private static let tabStripApps: Set<String> = [
+        "com.brave.Browser", "com.brave.Browser.beta", "com.brave.Browser.nightly",
+        "com.google.Chrome", "com.google.Chrome.beta", "com.google.Chrome.dev", "com.google.Chrome.canary",
+        "org.chromium.Chromium", "com.microsoft.edgemac", "com.microsoft.edgemac.Beta", "com.microsoft.edgemac.Dev",
+        "com.vivaldi.Vivaldi", "com.operasoftware.Opera", "com.operasoftware.OperaGX", "company.thebrowser.Browser",
+        "com.apple.Safari", "com.apple.SafariTechnologyPreview", "org.mozilla.firefox",
+        "org.mozilla.firefoxdeveloperedition", "org.mozilla.nightly", "app.zen-browser.zen",
+        "com.kagi.kagimacOS", "org.torproject.torbrowser",
     ]
 
     /// The window whose top strip (title bar / toolbar height) is under `point`.
@@ -371,7 +391,8 @@ final class WindowManager {
               let frame = win.frame, frame.contains(point) else { return nil }
         let offsetY = point.y - frame.minY
         guard offsetY >= 0, offsetY <= Prefs.titlebarHeight + 60, isEligible(win) else { return nil }
-        return (win, role.map(Self.controlRoles.contains) ?? false)
+        let onControl = (role.map(Self.controlRoles.contains) ?? false) || Self.tabStripApps.contains(bundleID(pid: pid))
+        return (win, onControl)
     }
 
     /// The window server's number for an app's on-screen window with `frame`.
