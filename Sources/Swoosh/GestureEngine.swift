@@ -181,8 +181,11 @@ final class GestureEngine {
             let windowMoved = live.map { hypot($0.minX - d.origin.x, $0.minY - d.origin.y) >= 1 } ?? false
             // macOS waits a moment before it starts moving a window that fills the
             // screen, so don't wait for it: a 10 pt drag that started on the
-            // title bar (not on a button or field) is a window drag.
-            let titleBarDrag = !d.onControl && moved >= 10
+            // title bar itself (not on a button or field) is a window drag.
+            // Below the title bar (toolbars, tab strips, app content) only a
+            // window the app is really moving counts: dragging there in apps
+            // like Figma selects or pans, and must never move the window.
+            let titleBarDrag = !d.onControl && moved >= 10 && d.offsetY <= Prefs.titlebarHeight
             guard windowMoved || titleBarDrag else { return }
             drag = nil
             // macOS's own tiling may already have restored the window's size.
