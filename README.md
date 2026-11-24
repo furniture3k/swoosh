@@ -136,10 +136,9 @@ How it stays light:
   which never holds or delays them. A click is first checked by arithmetic: a
   snapped window's title bar can only be at a few heights (top, a third, half,
   two thirds). Clicks anywhere else cost no Accessibility calls at all.
-- **Settings in a separate process.** Settings runs as its own short-lived
-  process that exits when you close the window. The always-running agent never
-  loads SwiftUI views, so it stays around 11 MB no matter how often you open
-  Settings. Run `--memory-test <file>` to check.
+- **One process.** Settings opens inside the running app, so Activity Monitor
+  only ever shows one Swoosh. Its views are built when the window opens and
+  released when it closes. Run `--memory-test <file>` to check.
 - **Event-driven, not polling.** Permission changes arrive via the system's
   Accessibility notification. The only timer is a 3-second, coalesced
   fallback.

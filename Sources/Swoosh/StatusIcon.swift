@@ -1,11 +1,16 @@
 import AppKit
 
 /// The menu bar glyph: a pair of googly eyes looking in different directions.
-/// When Swoosh is paused they close. Drawn in code so it stays crisp.
+/// When Swoosh is paused they close. Drawn in code so it stays crisp, and
+/// small so it sits quietly among the other menu bar items.
 enum StatusIcon {
+    /// Scale of the drawing below (designed on a 22×16 canvas).
+    private static let k: CGFloat = 0.6
+
     static func image(active: Bool) -> NSImage {
-        let size = NSSize(width: 22, height: 16)
+        let size = NSSize(width: 22 * k, height: 16 * k)
         let image = NSImage(size: size, flipped: false) { _ in
+            let t = NSAffineTransform(); t.scale(by: k); t.concat()
             NSColor.black.setStroke()
             NSColor.black.setFill()
             let eyes: [(center: NSPoint, r: CGFloat, look: CGVector)] = [
@@ -16,7 +21,7 @@ enum StatusIcon {
                 if active {
                     let ring = NSBezierPath(ovalIn: NSRect(x: eye.center.x - eye.r, y: eye.center.y - eye.r,
                                                            width: eye.r * 2, height: eye.r * 2))
-                    ring.lineWidth = 1.4
+                    ring.lineWidth = 1.5
                     ring.stroke()
                     let pr = eye.r * 0.48
                     let travel = eye.r - pr - 0.9

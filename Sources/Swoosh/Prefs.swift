@@ -3,11 +3,6 @@ import SwooshCore
 
 /// UserDefaults-backed settings. Keys are shared with the SwiftUI settings view.
 enum Prefs {
-    /// Posted by the Settings process after it changes a value.
-    static let changedNotification = Notification.Name("com.joshuatrow.swoosh.prefsChanged")
-    /// Posted by the agent to switch the open Settings window to a tab.
-    static let showTabNotification = Notification.Name("com.joshuatrow.swoosh.showTab")
-
     enum Key {
         static let enabled = "enabled"
         static let sensitivity = "swipeThreshold"

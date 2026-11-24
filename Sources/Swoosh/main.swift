@@ -3,15 +3,14 @@ import ApplicationServices
 import SwiftUI
 import SwooshCore
 
-/// The always-running agent: event tap, hotkeys, menu bar item. It never builds
-/// any SwiftUI; Settings runs in a separate short-lived process (see
-/// `SettingsAppDelegate`) so the agent's memory stays small.
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+/// The always-running agent: event tap, hotkeys, menu bar item, and the
+/// Settings window (built only when opened, released when closed).
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate {
     private let wm = WindowManager()
     private lazy var engine = GestureEngine(windowManager: wm)
     private lazy var hotkeys = Hotkeys(engine: engine)
     private var statusItem: NSStatusItem!
-    private var settingsProcess: NSRunningApplication?
+    private var settingsWindow: NSWindow?
     private var permissionTimer: Timer?
     private var lastHotkeyScheme: HotkeyScheme?
     private var visibilityObservation: NSKeyValueObservation?
@@ -24,9 +23,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         NotificationCenter.default.addObserver(self, selector: #selector(defaultsChanged),
                                                name: UserDefaults.didChangeNotification, object: nil)
-        // Changes made in the Settings process.
-        DistributedNotificationCenter.default().addObserver(self, selector: #selector(settingsProcessChanged),
-                                                            name: Prefs.changedNotification, object: nil)
 
         engine.onPermissionLost = { [weak self] in self?.checkPermission() }
         if AXIsProcessTrusted() {
@@ -62,24 +58,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return kr == KERN_SUCCESS ? Double(info.phys_footprint) / 1_048_576 : -1
     }
 
-    /// `--memory-test <file>`: the agent's footprint while idle, while the
-    /// Settings process is open, and after it has quit.
+    /// `--memory-test <file>`: the footprint while idle, while Settings is
+    /// open, and after it has closed.
     private func runMemoryTest(output: String) {
-        var log = String(format: "agent idle %.1f MB\n", AppDelegate.footprintMB())
+        var log = String(format: "idle %.1f MB\n", AppDelegate.footprintMB())
         openSettings(tab: .gestures)
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-            log += String(format: "agent while settings open %.1f MB\n", AppDelegate.footprintMB())
-            if let pid = self.settingsProcess?.processIdentifier {
-                var info = rusage_info_current()
-                let ok = withUnsafeMutablePointer(to: &info) {
-                    $0.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) { proc_pid_rusage(pid, RUSAGE_INFO_CURRENT, $0) }
-                }
-                if ok == 0 { log += String(format: "settings process %.1f MB\n", Double(info.ri_phys_footprint) / 1_048_576) }
-            }
-            self.settingsProcess?.terminate()
+            log += String(format: "settings open %.1f MB\n", AppDelegate.footprintMB())
+            self.settingsWindow?.close()
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                log += String(format: "agent after settings closed %.1f MB\n", AppDelegate.footprintMB())
-                log += "settings process exited: \(self.settingsProcess?.isTerminated ?? true)\n"
+                log += String(format: "settings closed %.1f MB\n", AppDelegate.footprintMB())
                 try? log.write(toFile: output, atomically: true, encoding: .utf8)
                 exit(0)
             }
@@ -90,11 +78,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Opening the app again (Finder, Spotlight) shows Settings, since there is no Dock icon.
         openSettings(tab: .general)
         return false
-    }
-
-    @objc private func settingsProcessChanged() {
-        CFPreferencesAppSynchronize(kCFPreferencesCurrentApplication)
-        defaultsChanged()
     }
 
     private func checkPermission() {
@@ -240,68 +223,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func openSettingsFromMenu() { openSettings(tab: .general) }
     @objc private func openGuide() { openSettings(tab: .gestures) }
 
-    /// Shows Settings in its own process (one at a time).
+    /// Shows the Settings window, in this process, so there is only ever one
+    /// Swoosh running. The Dock icon appears only while it is open.
     private func openSettings(tab: SettingsTab) {
-        if let running = settingsProcess, !running.isTerminated {
-            DistributedNotificationCenter.default().postNotificationName(
-                Prefs.showTabNotification, object: String(tab.rawValue), userInfo: nil, deliverImmediately: true)
-            running.activate()
-            return
-        }
-        let config = NSWorkspace.OpenConfiguration()
-        config.createsNewApplicationInstance = true
-        config.arguments = ["--settings", String(tab.rawValue)]
-        config.activates = true
-        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: config) { [weak self] app, error in
-            DispatchQueue.main.async {
-                if let error { NSLog("Swoosh: couldn't open Settings: \(error.localizedDescription)") }
-                self?.settingsProcess = app
-            }
-        }
-    }
-}
-
-/// `Swoosh --settings <tab>`: a separate process that only shows the Settings
-/// window and quits when it closes, giving all its memory back.
-final class SettingsAppDelegate: NSObject, NSApplicationDelegate {
-    private var window: NSWindow?
-
-    func applicationDidFinishLaunching(_ note: Notification) {
-        Prefs.registerDefaults()
-        let args = CommandLine.arguments
-        if let i = args.firstIndex(of: "--settings"), i + 1 < args.count, let raw = Int(args[i + 1]),
-           let tab = SettingsTab(rawValue: raw) {
-            SettingsRouter.shared.tab = tab
+        SettingsRouter.shared.tab = tab
+        if settingsWindow == nil {
+            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 540),
+                             styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
+            w.contentViewController = NSHostingController(rootView: SettingsView())
+            w.title = "Swoosh"
+            w.isReleasedWhenClosed = false
+            w.delegate = self
+            w.center()
+            settingsWindow = w
         }
         NSApp.setActivationPolicy(.regular)
-        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 540),
-                         styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
-        w.contentViewController = NSHostingController(rootView: SettingsView())
-        w.title = "Swoosh"
-        w.center()
-        window = w
         NSApp.activate(ignoringOtherApps: true)
-        w.makeKeyAndOrderFront(nil)
-
-        // Tell the agent about every change so it applies immediately.
-        NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { _ in
-            DistributedNotificationCenter.default().postNotificationName(Prefs.changedNotification, object: nil,
-                                                                         userInfo: nil, deliverImmediately: true)
-        }
-        // The agent asking to switch tabs (Settings… / Gesture Guide while open).
-        DistributedNotificationCenter.default().addObserver(forName: Prefs.showTabNotification, object: nil, queue: .main) { note in
-            if let raw = (note.object as? String).flatMap(Int.init), let tab = SettingsTab(rawValue: raw) {
-                SettingsRouter.shared.tab = tab
-            }
-            NSApp.activate(ignoringOtherApps: true)
-        }
+        settingsWindow?.makeKeyAndOrderFront(nil)
     }
 
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
-
-    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        window?.makeKeyAndOrderFront(nil)
-        return false
+    func windowWillClose(_ note: Notification) {
+        guard (note.object as? NSWindow) === settingsWindow else { return }
+        // Drop the SwiftUI views and go back to being a menu bar agent.
+        DispatchQueue.main.async { [weak self] in
+            self?.settingsWindow?.contentViewController = nil
+            self?.settingsWindow = nil
+            NSApp.setActivationPolicy(.accessory)
+        }
     }
 }
 
@@ -415,12 +363,6 @@ if let i = CommandLine.arguments.firstIndex(of: "--drag-test"), i + 1 < CommandL
     if !dragOnly, let f = win.frame, f.size != original.size { win.setFrame(original) }
     exit(0)
 }
-if CommandLine.arguments.contains("--settings") {
-    let settingsDelegate = SettingsAppDelegate()
-    app.delegate = settingsDelegate
-    app.run()
-} else {
-    let delegate = AppDelegate()
-    app.delegate = delegate
-    app.run()
-}
+let delegate = AppDelegate()
+app.delegate = delegate
+app.run()
