@@ -1,42 +1,36 @@
 import AppKit
 
-/// The menu bar glyph: a pair of googly eyes looking in different directions.
-/// When Swoosh is paused they close. Drawn in code so it stays crisp, and
-/// small so it sits quietly among the other menu bar items.
+/// The menu bar glyph: a small window outline with two motion lines trailing
+/// it. When Swoosh is paused the motion lines go and only a still window is
+/// left. Thin strokes, drawn in code so it stays crisp and sits quietly among
+/// the system's own menu bar icons.
 enum StatusIcon {
-    /// Scale of the drawing below (designed on a 22×16 canvas).
-    private static let k: CGFloat = 0.6
-
     static func image(active: Bool) -> NSImage {
-        let size = NSSize(width: 22 * k, height: 16 * k)
+        let size = NSSize(width: 17, height: 12)
         let image = NSImage(size: size, flipped: false) { _ in
-            let t = NSAffineTransform(); t.scale(by: k); t.concat()
             NSColor.black.setStroke()
-            NSColor.black.setFill()
-            let eyes: [(center: NSPoint, r: CGFloat, look: CGVector)] = [
-                (NSPoint(x: 5.6, y: 7.6), 4.6, CGVector(dx: 0.7, dy: -0.7)),
-                (NSPoint(x: 16.3, y: 8.2), 4.9, CGVector(dx: -0.4, dy: 0.9)),
-            ]
-            for eye in eyes {
-                if active {
-                    let ring = NSBezierPath(ovalIn: NSRect(x: eye.center.x - eye.r, y: eye.center.y - eye.r,
-                                                           width: eye.r * 2, height: eye.r * 2))
-                    ring.lineWidth = 1.5
-                    ring.stroke()
-                    let pr = eye.r * 0.48
-                    let travel = eye.r - pr - 0.9
-                    let pc = NSPoint(x: eye.center.x + eye.look.dx * travel, y: eye.center.y + eye.look.dy * travel)
-                    NSBezierPath(ovalIn: NSRect(x: pc.x - pr, y: pc.y - pr, width: pr * 2, height: pr * 2)).fill()
-                } else {
-                    // Asleep: closed eyelids.
-                    let lid = NSBezierPath()
-                    lid.move(to: NSPoint(x: eye.center.x - eye.r, y: eye.center.y))
-                    lid.curve(to: NSPoint(x: eye.center.x + eye.r, y: eye.center.y),
-                              controlPoint1: NSPoint(x: eye.center.x - eye.r * 0.5, y: eye.center.y - eye.r * 0.75),
-                              controlPoint2: NSPoint(x: eye.center.x + eye.r * 0.5, y: eye.center.y - eye.r * 0.75))
-                    lid.lineWidth = 1.6
-                    lid.lineCapStyle = .round
-                    lid.stroke()
+            let line: CGFloat = 1.2
+
+            // The window, with a hairline title bar.
+            let window = NSBezierPath(roundedRect: NSRect(x: 7.6, y: 1.6, width: 8.8, height: 8.8),
+                                      xRadius: 2, yRadius: 2)
+            window.lineWidth = line
+            window.stroke()
+            let titleBar = NSBezierPath()
+            titleBar.move(to: NSPoint(x: 7.6, y: 7.9))
+            titleBar.line(to: NSPoint(x: 16.4, y: 7.9))
+            titleBar.lineWidth = line * 0.8
+            titleBar.stroke()
+
+            // Motion lines.
+            if active {
+                for (y, from) in [(CGFloat(7.4), CGFloat(2.6)), (4.6, 0.8)] {
+                    let streak = NSBezierPath()
+                    streak.move(to: NSPoint(x: from, y: y))
+                    streak.line(to: NSPoint(x: 5.4, y: y))
+                    streak.lineWidth = line
+                    streak.lineCapStyle = .round
+                    streak.stroke()
                 }
             }
             return true
